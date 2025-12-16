@@ -50,5 +50,16 @@
         "duty": 0.35
       }
     ]
+  },
+  "logging": {
+    "level": "DEBUG",
+    "format": "%(asctime)s %(levelname)s:%(name)s:%(message)s",
+    "date_format": "%H:%M:%S",
+    "loggers": {
+      "root": "DEBUG",
+      "wamp": "DEBUG",
+      "wamp_bridge": "INFO",
+      "ntp": "INFO"
+    }
   }
 }

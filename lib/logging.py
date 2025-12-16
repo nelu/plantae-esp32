@@ -23,8 +23,9 @@ _level_dict = {
 
 _loggers = {}
 _stream = sys.stderr
-_default_fmt = "%(levelname)s:%(name)s:%(message)s"
+_default_fmt = "%(asctime)s %(levelname)s:%(name)s:%(message)s"
 _default_datefmt = "%Y-%m-%d %H:%M:%S"
+_tz_offset_s = 0  # Timezone offset in seconds, set by configure_logging
 
 
 class LogRecord:
@@ -68,7 +69,8 @@ class StreamHandler(Handler):
 
     def emit(self, record):
         if record.levelno >= self.level:
-            self.stream.write(self.format(record) + self.terminator)
+            # Use print() for MicroPython compatibility instead of stream.write()
+            print(self.format(record))
 
 
 class FileHandler(StreamHandler):
@@ -89,18 +91,61 @@ class Formatter:
         return "asctime" in self.fmt
 
     def formatTime(self, datefmt, record):
-        if hasattr(time, "strftime"):
-            return time.strftime(datefmt, time.localtime(record.ct))
-        return None
+        try:
+            # In MicroPython, time.time() returns seconds since 2000-01-01
+            # Apply timezone offset for proper local time display
+            adjusted_time = record.ct + _tz_offset_s
+            
+            if hasattr(time, "strftime") and hasattr(time, "localtime"):
+                lt = time.localtime(adjusted_time)
+                return time.strftime(datefmt, lt)
+        except Exception as e:
+            pass
+        
+        # Fallback for MicroPython - simple time formatting with timezone
+        try:
+            adjusted_time = record.ct + _tz_offset_s
+            lt = time.localtime(adjusted_time)
+            # Format as HH:MM:SS
+            return "%02d:%02d:%02d" % (lt[3], lt[4], lt[5])
+        except Exception as e:
+            pass
+            
+        # If localtime fails, try to use current time directly
+        try:
+            # Get fresh time and format it with timezone
+            current_time = time.time() + _tz_offset_s
+            lt = time.localtime(current_time)
+            return "%02d:%02d:%02d" % (lt[3], lt[4], lt[5])
+        except:
+            pass
+            
+        # Ultimate fallback - use ticks for relative timing
+        try:
+            if hasattr(time, 'ticks_ms'):
+                ms = time.ticks_ms()
+                seconds = ms // 1000
+                mins = seconds // 60
+                hours = mins // 60
+                return "%02d:%02d:%02d" % (hours % 24, mins % 60, seconds % 60)
+        except:
+            pass
+            
+        # Last resort - just show the raw timestamp
+        return "%.1f" % (record.ct or 0)
 
     def format(self, record):
         if self.usesTime():
             record.asctime = self.formatTime(self.datefmt, record)
+            # Ensure asctime is never None
+            if record.asctime is None:
+                record.asctime = "??:??:??"
+        
         return self.fmt % {
             "name": record.name,
             "message": record.message,
             "msecs": record.msecs,
-            "asctime": record.asctime,
+            "asctime": record.asctime or "",
             "levelname": record.levelname,
         }
 

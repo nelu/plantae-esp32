@@ -6,4 +6,4 @@ def get_device_id(cfg=None):
         return cfg["device"]["id"]
     wlan = network.WLAN(network.STA_IF)
     mac = wlan.config("mac")
-    return "esp32-" + ubinascii.hexlify(mac).decode()
+    return "plantae-" + ubinascii.hexlify(mac).decode()

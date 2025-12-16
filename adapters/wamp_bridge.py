@@ -2,6 +2,9 @@ import time
 import uasyncio as asyncio
 from protocols.ws_async import connect as ws_connect
 from protocols.mpwamp import WampClient, WampConfig
+from lib.logging import getLogger
+
+LOG = getLogger("wamp_bridge")
 
 class WampBridge:
     def __init__(self, cfg, state, switchbank, config_mgr, schedule_reboot):
@@ -35,22 +38,40 @@ class WampBridge:
         url = self.cfg["wamp"]["url"]
         realm = self.cfg["wamp"].get("realm", "realm1")
         ka = self.cfg.get('wamp', {}).get('keepalive', {})
+        
+        # Connect WebSocket with WAMP subprotocol
         ws = await ws_connect(url, ping_interval_s=int(ka.get('ping_interval_s',20)), idle_timeout_s=int(ka.get('idle_timeout_s',60)))
+        
+        # Create WAMP client and join realm
         self.client = WampClient(ws, WampConfig(url=url, realm=realm))
         await self.client.open()
-        self.state.wamp_ok = True
-
+        
+        # Wait a bit for the session to be fully established
+        await asyncio.sleep_ms(100)
+        
+        # Register RPC procedures
         await self.client.register(self._topic("control"), self.rpc_control)
         await self.client.register(self._topic("calibrate"), self.rpc_calibrate)
         await self.client.register(self._topic("reboot"), self.rpc_reboot)
 
+        # Register device-specific procedures
         for suf in self._addr_suffixes():
             await self.client.register(self._addr_topic("calibrate", suf), self.rpc_calibrate)
             await self.client.register(self._addr_topic("reboot", suf), self.rpc_reboot)
             await self.client.register(self._addr_topic("reset", suf), self.rpc_reset)
 
+        # Subscribe to master announcements
         await self.client.subscribe(self._topic("announce.master"), self.on_master)
+        
+        # Announce we're online
         await self.publish_announce("announce.online")
+        
+        # Mark as connected only after everything is set up
+        self.state.wamp_ok = True
+        LOG.info("Bridge fully connected and configured")
+        
+        # Add a small delay to see if this helps with stability
+        await asyncio.sleep_ms(100)
 
     async def close(self):
         if self.client:

@@ -7,7 +7,7 @@ from adapters.ntp import sync as ntp_sync
 from adapters.http_api import HttpApi
 from adapters.config_manager import ConfigManager
 from adapters.wamp_bridge import WampBridge
-from lib.logging import Logger, DEBUG, getLogger
+from lib.logging import Logger, DEBUG, getLogger, basicConfig
 
 from domain.state import DeviceState
 from domain.scheduler import duty_from_schedule
@@ -20,12 +20,69 @@ from drivers.flowsensor import types as flowtypes
 
 from app.device_id import get_device_id
 
-LOG = getLogger()
+def configure_logging(cfg):
+    """Configure logging from config file"""
+    from lib.logging import basicConfig, DEBUG, INFO, WARNING, ERROR, CRITICAL
+    
+    # Map string levels to constants
+    level_map = {
+        "DEBUG": DEBUG,
+        "INFO": INFO, 
+        "WARNING": WARNING,
+        "ERROR": ERROR,
+        "CRITICAL": CRITICAL
+    }
+    
+    # Get logging config with defaults
+    log_cfg = cfg.get("logging", {})
+    default_level = level_map.get(log_cfg.get("level", "WARNING"), WARNING)
+    
+    # Configure basic logging with timestamp format
+    log_format = log_cfg.get("format", "%(asctime)s %(levelname)s:%(name)s:%(message)s")
+    date_format = log_cfg.get("date_format", "%H:%M:%S")
+    basicConfig(level=default_level, format=log_format, datefmt=date_format)
+    
+    # Set timezone offset for logging timestamps
+    tz_offset_min = cfg.get("schedule", {}).get("tz_offset_min", 0)
+    import lib.logging as logging_module
+    logging_module._tz_offset_s = tz_offset_min * 60
+    
+    # Configure individual loggers
+    loggers_cfg = log_cfg.get("loggers", {})
+    for logger_name, level_str in loggers_cfg.items():
+        level = level_map.get(level_str, default_level)
+        if logger_name == "root":
+            logger = getLogger()
+        else:
+            logger = getLogger(logger_name)
+        logger.setLevel(level)
+    
+    # Test logging with time debugging
+    LOG = getLogger()
+    LOG.info("Logging configured from config file")
+    
+    # Debug time values
+    import time
+    current_time = time.time()
+    try:
+        lt = time.localtime(current_time)
+        LOG.info("Current time: %d, localtime: %04d-%02d-%02d %02d:%02d:%02d" % 
+                (current_time, lt[0], lt[1], lt[2], lt[3], lt[4], lt[5]))
+    except Exception as e:
+        LOG.info("Time debug failed: %s, raw time: %d" % (e, current_time))
+    
+    return LOG
+
+LOG = None  # Will be set after config is loaded
 
 class Supervisor:
     def __init__(self, config_path="config.json"):
         self.cfg_mgr = ConfigManager(config_path)
         self.cfg = self.cfg_mgr.load()
+        
+        # Configure logging from config file
+        global LOG
+        LOG = configure_logging(self.cfg)
 
         self.device_id = get_device_id(self.cfg)
         self.state = DeviceState(self.device_id)
@@ -80,7 +137,7 @@ class Supervisor:
                     self.state.last_error = "wifi"
             except Exception as e:
                 self.state.last_error = "wifi:%s" % e
-                LOG.exception("wifi:", exc_info=e)
+                if LOG: LOG.exception("wifi:", exc_info=e)
             await asyncio.sleep(2)
 
     async def task_ntp(self):
@@ -93,7 +150,7 @@ class Supervisor:
                 success = await ntp_sync(host)
                 self.state.ntp_ok = bool(success)
                 if success:
-                    LOG.debug("NTP: synced, time=%d" % time.time())
+                    if LOG: LOG.debug("NTP: synced, time=%d" % time.time())
                     if initial_sync:
                         initial_sync = False
                         # After first successful sync, use normal interval
@@ -101,7 +158,7 @@ class Supervisor:
                     else:
                         await asyncio.sleep(every)
                 else:
-                    LOG.debug("NTP: sync failed")
+                    if LOG: LOG.debug("NTP: sync failed")
                     # Retry more frequently if sync fails, especially on startup
                     retry_interval = 10 if initial_sync else 60
                     await asyncio.sleep(retry_interval)
@@ -136,6 +193,8 @@ class Supervisor:
             get_cfg=lambda: self.cfg,
             patch_cfg=self._patch_cfg,
             schedule_reboot=self.schedule_reboot,
+            pwm_out=self.pwm,
+            flow_sensor=self.flow,
         )
         await api.serve(port=80)
         while True:
@@ -161,7 +220,7 @@ class Supervisor:
                 self.wamp = WampBridge(self.cfg, self.state, self.switchbank, self.cfg_mgr, self.schedule_reboot)
                 await self.wamp.connect()
                 backoff = 1
-                while self.wamp and self.wamp.client:
+                while self.wamp and self.wamp.client and self.wamp.client._alive:
                     await self.wamp.publish_sense()
                     await self.wamp.publish_status()
                     await asyncio.sleep(1)
@@ -178,14 +237,41 @@ class Supervisor:
                 backoff = 2*backoff if backoff < 60 else 60
 
     async def run(self):
-        self._init_hw()
-        asyncio.create_task(self.task_wifi())
-        asyncio.create_task(self.task_ntp())
-        asyncio.create_task(self.task_http())
-        asyncio.create_task(self.task_flow())
-        asyncio.create_task(self.task_pwm_schedule())
-        asyncio.create_task(self.task_wamp())
+        try:
+            self._init_hw()
+            LOG.info("Hardware initialized successfully")
+            
+            asyncio.create_task(self.task_wifi())
+            asyncio.create_task(self.task_ntp())
+            asyncio.create_task(self.task_http())
+            asyncio.create_task(self.task_flow())
+            asyncio.create_task(self.task_pwm_schedule())
+            asyncio.create_task(self.task_wamp())
+            
+            LOG.info("All tasks started successfully")
 
-        while True:
-            self._maybe_reboot()
-            await asyncio.sleep(0.25)
+            loop_count = 0
+            while True:
+                self._maybe_reboot()
+                
+                # Log memory usage every 60 seconds to track potential leaks
+                loop_count += 1
+                if loop_count % 240 == 0:  # Every 60 seconds (240 * 0.25s)
+                    import gc
+                    gc.collect()  # Force garbage collection
+                    free_mem = gc.mem_free()
+                    if LOG:
+                        LOG.info("Memory check: %d bytes free" % free_mem)
+                    if free_mem < 10000:  # Less than 10KB free
+                        if LOG:
+                            LOG.error("Low memory warning: %d bytes" % free_mem)
+                
+                await asyncio.sleep(0.25)
+        except Exception as e:
+            if LOG:
+                LOG.error("Critical error in supervisor: %s" % e)
+            print("CRITICAL ERROR:", e)
+            # Don't let the system crash silently
+            import sys
+            sys.print_exception(e)
+            raise

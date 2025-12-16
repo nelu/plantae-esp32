@@ -81,9 +81,18 @@ class WebSocket:
         await self._w.drain()
 
     async def recv(self) -> str:
+        if self._closed:
+            return ""
         while True:
-            b1 = (await self._r.readexactly(1))[0]
-            b2 = (await self._r.readexactly(1))[0]
+            try:
+                b1 = (await self._r.readexactly(1))[0]
+                b2 = (await self._r.readexactly(1))[0]
+            except OSError as e:
+                # Handle connection closed
+                if e.errno == 9:  # EBADF
+                    self._closed = True
+                    return ""
+                raise
             opcode = b1 & 0x0F
             masked = (b2 & 0x80) != 0
             ln = b2 & 0x7F
