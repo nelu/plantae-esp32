@@ -1,0 +1,54 @@
+{
+  "wifi": {
+    "ssid": "Voda24",
+    "password": "etajul28"
+  },
+  "ntp": {
+    "host": "pool.ntp.org",
+    "sync_every_s": 21600
+  },
+  "wamp": {
+    "url": "ws://192.168.4.106:80/ws",
+    "realm": "realm1",
+    "prefix": "org.robits.plantae.",
+    "legacy_by_ip": true,
+    "keepalive": {
+      "ping_interval_s": 20,
+      "idle_timeout_s": 60
+    }
+  },
+  "flow": {
+    "type": "YFS401",
+    "pin": 14,
+    "calibration": 0,
+    "read_interval_ms": 1000,
+    "pullup_external": true
+  },
+  "outputs": {
+    "pwm": {
+      "pin": 25,
+      "freq": 20000,
+      "active_low": false
+    },
+    "pca9685": {
+      "enabled": false,
+      "i2c_id": 0,
+      "scl": 22,
+      "sda": 21,
+      "addr": 64,
+      "freq": 400000,
+      "channels": 16,
+      "pwm_freq": 1000
+    }
+  },
+  "schedule": {
+    "tz_offset_min": 120,
+    "pwm": [
+      {
+        "start": "08:00",
+        "end": "08:10",
+        "duty": 0.35
+      }
+    ]
+  }
+}
