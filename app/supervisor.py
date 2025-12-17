@@ -4,23 +4,16 @@ from machine import I2C, Pin, reset
 
 from adapters.wifi import Wifi
 from adapters.ntp import sync as ntp_sync
-from adapters.http_api import HttpApi
 from adapters.config_manager import ConfigManager
 from adapters.wamp_bridge import WampBridge
-from lib.logging import Logger, DEBUG, getLogger, basicConfig
 
 from domain.state import DeviceState
-from domain.scheduler import duty_from_schedule
-from domain.controllers import SwitchBank
-
-from drivers.pca9685 import PCA9685
-from drivers.pwm_out import PwmOut
-from drivers.flowsensor.flowsensor import FlowSensor
-from drivers.flowsensor import types as flowtypes
 
 from app.device_id import get_device_id
 
 def configure_logging(cfg):
+    from lib.logging import Logger, DEBUG, getLogger, basicConfig
+
     """Configure logging from config file"""
     from lib.logging import basicConfig, DEBUG, INFO, WARNING, ERROR, CRITICAL
     
@@ -110,6 +103,13 @@ class Supervisor:
         return lt[3]*60 + lt[4]
 
     def _init_hw(self):
+        from drivers.pca9685 import PCA9685
+
+        from drivers.pwm_out import PwmOut
+        from drivers.flowsensor.flowsensor import FlowSensor
+        from drivers.flowsensor import types as flowtypes
+        from domain.controllers import SwitchBank
+
         pwm_cfg = self.cfg["outputs"]["pwm"]
         self.pwm = PwmOut(pwm_cfg["pin"], pwm_cfg.get("freq",20000), pwm_cfg.get("active_low",False))
 
@@ -129,16 +129,38 @@ class Supervisor:
         self.flow.begin(pullup=bool(fcfg.get("pullup_external", True)))
 
     async def task_wifi(self):
+        consecutive_failures = 0
         while True:
             try:
+                # Check if already connected before trying to reconnect
+                if self.wifi.is_connected():
+                    self.state.ip = self.wifi.ip()
+                    consecutive_failures = 0
+                    await asyncio.sleep(5)  # Check less frequently when connected
+                    continue
+                
                 ok = await self.wifi.ensure(self.cfg["wifi"]["ssid"], self.cfg["wifi"]["password"])
                 self.state.ip = self.wifi.ip()
                 if not ok:
+                    consecutive_failures += 1
                     self.state.last_error = "wifi"
+                    if LOG and consecutive_failures % 10 == 1:  # Log every 10th failure to reduce spam
+                        LOG.warning("WiFi connection failed (attempt %d)" % consecutive_failures)
+                else:
+                    consecutive_failures = 0
+                    
             except Exception as e:
+                consecutive_failures += 1
                 self.state.last_error = "wifi:%s" % e
-                if LOG: LOG.exception("wifi:", exc_info=e)
-            await asyncio.sleep(2)
+                if LOG and consecutive_failures % 10 == 1:  # Log every 10th failure
+                    LOG.exception("WiFi error (attempt %d):" % consecutive_failures, exc_info=e)
+            
+            # Exponential backoff for failed connections
+            if consecutive_failures > 0:
+                delay = min(2 ** min(consecutive_failures // 5, 4), 30)  # Max 30 seconds
+                await asyncio.sleep(delay)
+            else:
+                await asyncio.sleep(2)
 
     async def task_ntp(self):
         every = int(self.cfg.get("ntp", {}).get("sync_every_s", 21600))
@@ -180,6 +202,8 @@ class Supervisor:
             await asyncio.sleep_ms(20)
 
     async def task_pwm_schedule(self):
+        from domain.scheduler import duty_from_schedule
+
         while True:
             sched = self.cfg.get("schedule", {}).get("pwm", [])
             duty = duty_from_schedule(sched, self._local_minutes())
@@ -188,6 +212,8 @@ class Supervisor:
             await asyncio.sleep(1)
 
     async def task_http(self):
+        from adapters.http_api import HttpApi
+
         api = HttpApi(
             get_status=self.state.snapshot,
             get_cfg=lambda: self.cfg,
@@ -238,15 +264,22 @@ class Supervisor:
 
     async def run(self):
         try:
-            self._init_hw()
             LOG.info("Hardware initialized successfully")
             
             asyncio.create_task(self.task_wifi())
             asyncio.create_task(self.task_ntp())
+            # Wait for WiFi + NTP (required for TLS cert validation)
+
+            asyncio.create_task(self.task_wamp())
+            while not self.state.wamp_ok:
+                await asyncio.sleep(0.2)
+
+            self._init_hw()
+
             asyncio.create_task(self.task_http())
             asyncio.create_task(self.task_flow())
             asyncio.create_task(self.task_pwm_schedule())
-            asyncio.create_task(self.task_wamp())
+
             
             LOG.info("All tasks started successfully")
 
