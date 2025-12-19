@@ -8,26 +8,34 @@
     "sync_every_s": 21600
   },
   "wamp": {
-    "url": "ws://192.168.4.106:80/ws",
+    "url": "wss://plantae.robits.org/ws",
     "realm": "realm1",
     "prefix": "org.robits.plantae.",
     "legacy_by_ip": true,
+    "tls_debug": true,
+    "insecure": false,
     "keepalive": {
-      "ping_interval_s": 20,
-      "idle_timeout_s": 60
+      "ping_interval_s": 25,
+      "idle_timeout_s": 180
     }
   },
   "flow": {
     "type": "YFS401",
-    "pin": 14,
+    "pin": 34,
     "calibration": 0,
     "read_interval_ms": 1000,
     "pullup_external": true
   },
+  "inputs": {
+    "test_btn": {
+      "pin": 20,
+      "active_low": false
+    }
+  },
   "outputs": {
     "pwm": {
-      "pin": 25,
-      "freq": 20000,
+      "pin": 15,
+      "freq": 100,
       "active_low": false
     },
     "pca9685": {
@@ -46,8 +54,8 @@
     "pwm": [
       {
         "start": "08:00",
-        "end": "08:10",
-        "duty": 0.35
+        "end": "23:10",
+        "duty": 1
       }
     ]
   },
@@ -58,8 +66,8 @@
     "loggers": {
       "root": "DEBUG",
       "wamp": "DEBUG",
-      "wamp_bridge": "INFO",
-      "ntp": "INFO"
+      "wamp_bridge": "DEBUG",
+      "ntp": "DEBUG"
     }
   }
 }

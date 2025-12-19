@@ -1,7 +1,6 @@
 import time
 import uasyncio as asyncio
-from protocols.ws_async import connect as ws_connect
-from protocols.mpwamp import WampClient, WampConfig
+from protocols.mpautobahn import AutobahnWS, parse_ws_url
 from lib.logging import getLogger
 
 LOG = getLogger("wamp_bridge")
@@ -34,57 +33,101 @@ class WampBridge:
     def _addr_topic(self, base_name, suffix):
         return self._pfx() + ("%s.%s" % (base_name, suffix))
 
+    def is_alive(self):
+        """
+        Connectivity check for the current WAMP client (AutobahnWS).
+        """
+        c = self.client
+        if not c:
+            return False
+        is_connected = getattr(c, "is_connected", None)
+        return bool(is_connected()) if callable(is_connected) else False
+
     async def connect(self):
         url = self.cfg["wamp"]["url"]
         realm = self.cfg["wamp"].get("realm", "realm1")
-        ka = self.cfg.get('wamp', {}).get('keepalive', {})
-        
-        # Connect WebSocket with WAMP subprotocol
-        ws = await ws_connect(url, ping_interval_s=int(ka.get('ping_interval_s',20)), idle_timeout_s=int(ka.get('idle_timeout_s',60)))
-        
-        # Create WAMP client and join realm
-        self.client = WampClient(ws, WampConfig(url=url, realm=realm))
-        await self.client.open()
-        
-        # Wait a bit for the session to be fully established
+        ka = self.cfg.get("wamp", {}).get("keepalive", {})
+
+        self.client = None
+        self.state.wamp_ok = False
+
+        # Minimal, non-spammy: only prints once per attempt here
+        if LOG:
+            LOG.info("WAMP: url=%s realm=%s", url, realm)
+
+        import gc
+        gc.collect()
+
+        # Parse ws:// / wss:// URL without urllib (reuse helper from ws_async)
+        scheme, host, port, path = parse_ws_url(url)
+        use_ssl = (scheme == "wss")
+
+        # AutobahnWS handles both WebSocket and WAMP session handshake
+        # Pass keepalive config for resilience over public internet
+        self.client = AutobahnWS(
+            host=host,
+            port=port,
+            realm=realm,
+            path=path,
+            use_ssl=use_ssl,
+            ping_interval_s=ka.get("ping_interval_s"),
+            idle_timeout_s=ka.get("idle_timeout_s"),
+        )
+
+        await self.client.connect()
         await asyncio.sleep_ms(100)
-        
-        # Register RPC procedures
+
         await self.client.register(self._topic("control"), self.rpc_control)
         await self.client.register(self._topic("calibrate"), self.rpc_calibrate)
         await self.client.register(self._topic("reboot"), self.rpc_reboot)
 
-        # Register device-specific procedures
         for suf in self._addr_suffixes():
             await self.client.register(self._addr_topic("calibrate", suf), self.rpc_calibrate)
             await self.client.register(self._addr_topic("reboot", suf), self.rpc_reboot)
             await self.client.register(self._addr_topic("reset", suf), self.rpc_reset)
 
-        # Subscribe to master announcements
         await self.client.subscribe(self._topic("announce.master"), self.on_master)
-        
-        # Announce we're online
         await self.publish_announce("announce.online")
-        
-        # Mark as connected only after everything is set up
+
         self.state.wamp_ok = True
-        LOG.info("Bridge fully connected and configured")
-        
-        # Add a small delay to see if this helps with stability
-        await asyncio.sleep_ms(100)
+        self.state.last_error = None
+        if LOG:
+            LOG.info("WAMP connected: %s (%s)" % (url, realm))
 
     async def close(self):
+        import gc
+        import uasyncio as asyncio
+
         if self.client:
-            try: await self.publish_announce("announce.offline")
-            except Exception: pass
-            try: await self.client.close()
-            except Exception: pass
+            try:
+                await self.publish_announce("announce.offline")
+            except Exception:
+                pass
+            try:
+                await self.client.close()
+            except Exception:
+                pass
+
         self.client = None
         self.state.wamp_ok = False
 
+        # give uasyncio a chance to run socket close callbacks
+        await asyncio.sleep_ms(200)
+        gc.collect()
+
     async def publish_announce(self, topic_name):
-        if not self.client: return
-        await self.client.publish(self._topic(topic_name), kwargs={"id": self.state.device_id, "ip": self.state.ip, "ts": time.time()})
+        c = self.client
+        if not c:
+            return
+        # require a joined session
+        is_connected = getattr(c, "is_connected", None)
+        if callable(is_connected):
+            if not is_connected():
+                return
+
+        payload = {"id": self.state.device_id, "ip": self.state.ip, "ts": time.time()}
+        pub_id = await c.publish(self._topic(topic_name), kwargs=payload, acknowledge=True)
+        LOG.debug("Announce published: %s pub_id=%s", topic_name, pub_id)
 
     async def publish_switch(self, idx, on):
         if not self.client: return

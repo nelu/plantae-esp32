@@ -231,36 +231,93 @@ class Supervisor:
         self.cfg_mgr.save()
 
     async def task_wamp(self):
+        if LOG: LOG.info("task_wamp: started")
+
         backoff = 1
+        ntp_quiet_done = False
+
         while True:
             if not self.wifi.is_connected():
                 await asyncio.sleep(2)
                 continue
-            
+
             # Wait for NTP sync before attempting WAMP connection
             if not self.state.ntp_ok:
                 await asyncio.sleep(2)
                 continue
-                
+
+            # One-time quiet period after first NTP success (helps ESP32 TLS)
+            if not ntp_quiet_done:
+                ntp_quiet_done = True
+                await asyncio.sleep(3)
+
             try:
                 self.wamp = WampBridge(self.cfg, self.state, self.switchbank, self.cfg_mgr, self.schedule_reboot)
+                if LOG: LOG.info("task_wamp: connecting...")
+
+                import gc
+                gc.collect()
+                await asyncio.sleep_ms(0)
+
                 await self.wamp.connect()
                 backoff = 1
-                while self.wamp and self.wamp.client and self.wamp.client._alive:
-                    await self.wamp.publish_sense()
+
+                while self.wamp and self.wamp.is_alive():
+                    # await self.wamp.publish_sense()
                     await self.wamp.publish_status()
                     await asyncio.sleep(1)
-            except Exception as e:
-                self.state.wamp_ok = False
-                self.state.last_error = "wamp:%s" % (e,)
+
+                # Connection loop ended; close cleanly before reconnecting
                 try:
                     if self.wamp:
                         await self.wamp.close()
                 except Exception:
                     pass
+                
+                # Memory cleanup after disconnect
+                import gc
+                gc.collect()
+
+            except Exception as e:
+                # Make sure we tear down the previous bridge/socket
+                try:
+                    if self.wamp:
+                        await self.wamp.close()
+                except Exception:
+                    pass
+
+                # Memory cleanup after error/disconnect
+                import gc
+                gc.collect()
+
+                await asyncio.sleep(1)
+
+                self.state.wamp_ok = False
+                self.state.last_error = "wamp:%r" % (e,)
+                if LOG:
+                    LOG.error("WAMP connect failed: type=%s repr=%r" % (type(e), e))
+                try:
+                    import sys
+                    sys.print_exception(e)
+                except Exception:
+                    pass
+
                 self.wamp = None
-                await asyncio.sleep(backoff)
-                backoff = 2*backoff if backoff < 60 else 60
+
+                # If the underlying error was OSError(16), cool down a bit more
+                eno = None
+                try:
+                    if isinstance(e, OSError) and e.args:
+                        eno = e.args[0]
+                except Exception:
+                    pass
+
+                if eno == 16:
+                    await asyncio.sleep(2)
+                else:
+                    await asyncio.sleep(backoff)
+
+                backoff = 2 * backoff if backoff < 60 else 60
 
     async def run(self):
         try:

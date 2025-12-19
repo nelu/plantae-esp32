@@ -6,6 +6,7 @@ DEFAULT = {
   "device": {"name": "", "id": ""},
   "wifi": {"ssid": "", "password": ""},
   "ntp": {"host": "pool.ntp.org", "sync_every_s": 21600},
+  "time": {"last_mpy_s": 0},
   "wamp": {"url": "ws://10.0.0.1:8080/ws", "realm": "realm1", "prefix": "org.robits.plantae.", "legacy_by_ip": True, "keepalive": {"ping_interval_s": 20, "idle_timeout_s": 60}},
   "flow": {"type": "YFS401", "pin": 14, "calibration": 0, "read_interval_ms": 1000, "pullup_external": True},
   "outputs": {
