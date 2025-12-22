@@ -1,2 +1,1 @@
-from .types import *
-from .flowsensor import FlowSensor
+from .flowsensor import FlowSensor, flowtypes

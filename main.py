@@ -5,4 +5,4 @@ def main():
     sup = Supervisor("config.json")
     asyncio.run(sup.run())
 
-#main()
+main()

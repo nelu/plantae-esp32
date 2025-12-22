@@ -1,6 +1,12 @@
 from machine import Pin, disable_irq, enable_irq
 import time
 
+# sensor pulses per liter
+flowtypes = {
+"YFS401": 4550,
+"YFS201": 450
+}
+
 class FlowSensor:
     def __init__(self, pulses_per_liter, pin):
         self._pin_num=int(pin)

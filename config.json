@@ -8,7 +8,7 @@
     "sync_every_s": 21600
   },
   "wamp": {
-    "url": "wss://plantae.robits.org/ws",
+    "url": "ws://192.168.4.106/ws",
     "realm": "realm1",
     "prefix": "org.robits.plantae.",
     "legacy_by_ip": true,
@@ -27,14 +27,15 @@
     "pullup_external": true
   },
   "inputs": {
-    "test_btn": {
-      "pin": 20,
-      "active_low": false
+    "pwm_test_btn": {
+      "pin": 35,
+      "active_low": false,
+      "test_duty": 1.0
     }
   },
   "outputs": {
     "pwm": {
-      "pin": 15,
+      "pin": 2,
       "freq": 100,
       "active_low": false
     },
@@ -54,11 +55,18 @@
     "pwm": [
       {
         "start": "08:00",
-        "end": "23:10",
-        "duty": 1
+        "end": "20:10",
+        "duty": 0.5
       }
-    ]
+    ],
+    "dosing": {
+        "start": "08:00",
+        "end": "20:10",
+        "output": "pwm",
+        "quantity": 0.25
+      }
   },
+
   "logging": {
     "level": "DEBUG",
     "format": "%(asctime)s %(levelname)s:%(name)s:%(message)s",

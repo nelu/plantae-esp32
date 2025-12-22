@@ -2,6 +2,8 @@ import time
 import uasyncio as asyncio
 from protocols.mpautobahn import AutobahnWS, parse_ws_url
 from lib.logging import getLogger
+from version import VERSION, BUILD_DATE
+
 
 LOG = getLogger("wamp_bridge")
 
@@ -13,6 +15,7 @@ class WampBridge:
         self.config_mgr = config_mgr
         self.schedule_reboot = schedule_reboot
         self.client = None
+        self._graceful_close = False  # Set True on reboot to send announce.offline
 
     def _pfx(self):
         return self.cfg["wamp"].get("prefix", "org.robits.plantae.")
@@ -99,10 +102,12 @@ class WampBridge:
         import uasyncio as asyncio
 
         if self.client:
-            try:
-                await self.publish_announce("announce.offline")
-            except Exception:
-                pass
+            # Only send announce.offline on graceful shutdown (e.g. reboot)
+            if self._graceful_close:
+                try:
+                    await self.publish_announce("announce.offline")
+                except Exception:
+                    pass
             try:
                 await self.client.close()
             except Exception:
@@ -110,6 +115,7 @@ class WampBridge:
 
         self.client = None
         self.state.wamp_ok = False
+        self._graceful_close = False
 
         # give uasyncio a chance to run socket close callbacks
         await asyncio.sleep_ms(200)
@@ -125,7 +131,10 @@ class WampBridge:
             if not is_connected():
                 return
 
-        payload = {"id": self.state.device_id, "ip": self.state.ip, "ts": time.time()}
+        payload = {"id": self.state.device_id, "ip": self.state.ip,
+                   "ver": VERSION,
+                   "build": BUILD_DATE,
+                   "ts": time.time()}
         pub_id = await c.publish(self._topic(topic_name), kwargs=payload, acknowledge=True)
         LOG.debug("Announce published: %s pub_id=%s", topic_name, pub_id)
 
@@ -190,5 +199,13 @@ class WampBridge:
         if "timeout" in kwargs:
             try: t = int(kwargs["timeout"])
             except Exception: pass
+        
+        # Send announce.offline before reboot
+        self._graceful_close = True
+        try:
+            await self.publish_announce("announce.offline")
+        except Exception:
+            pass
+        
         self.schedule_reboot(t)
         return True

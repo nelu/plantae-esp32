@@ -1,45 +1,44 @@
-import uasyncio as asyncio
 import time
+
+import uasyncio as asyncio
 from machine import I2C, Pin, reset
 
-from adapters.wifi import Wifi
-from adapters.ntp import sync as ntp_sync
 from adapters.config_manager import ConfigManager
-from adapters.wamp_bridge import WampBridge
-
+from adapters.ntp import sync as ntp_sync
+from adapters.wifi import Wifi
+from app.device_id import get_device_id
 from domain.state import DeviceState
 
-from app.device_id import get_device_id
 
 def configure_logging(cfg):
-    from lib.logging import Logger, DEBUG, getLogger, basicConfig
+    from lib.logging import getLogger
 
     """Configure logging from config file"""
     from lib.logging import basicConfig, DEBUG, INFO, WARNING, ERROR, CRITICAL
-    
+
     # Map string levels to constants
     level_map = {
         "DEBUG": DEBUG,
-        "INFO": INFO, 
+        "INFO": INFO,
         "WARNING": WARNING,
         "ERROR": ERROR,
         "CRITICAL": CRITICAL
     }
-    
+
     # Get logging config with defaults
     log_cfg = cfg.get("logging", {})
     default_level = level_map.get(log_cfg.get("level", "WARNING"), WARNING)
-    
+
     # Configure basic logging with timestamp format
     log_format = log_cfg.get("format", "%(asctime)s %(levelname)s:%(name)s:%(message)s")
     date_format = log_cfg.get("date_format", "%H:%M:%S")
     basicConfig(level=default_level, format=log_format, datefmt=date_format)
-    
+
     # Set timezone offset for logging timestamps
     tz_offset_min = cfg.get("schedule", {}).get("tz_offset_min", 0)
     import lib.logging as logging_module
     logging_module._tz_offset_s = tz_offset_min * 60
-    
+
     # Configure individual loggers
     loggers_cfg = log_cfg.get("loggers", {})
     for logger_name, level_str in loggers_cfg.items():
@@ -49,30 +48,32 @@ def configure_logging(cfg):
         else:
             logger = getLogger(logger_name)
         logger.setLevel(level)
-    
+
     # Test logging with time debugging
     LOG = getLogger()
     LOG.info("Logging configured from config file")
-    
+
     # Debug time values
     import time
     current_time = time.time()
     try:
         lt = time.localtime(current_time)
-        LOG.info("Current time: %d, localtime: %04d-%02d-%02d %02d:%02d:%02d" % 
-                (current_time, lt[0], lt[1], lt[2], lt[3], lt[4], lt[5]))
+        LOG.info("Current time: %d, localtime: %04d-%02d-%02d %02d:%02d:%02d" %
+                 (current_time, lt[0], lt[1], lt[2], lt[3], lt[4], lt[5]))
     except Exception as e:
         LOG.info("Time debug failed: %s, raw time: %d" % (e, current_time))
-    
+
     return LOG
 
+
 LOG = None  # Will be set after config is loaded
+
 
 class Supervisor:
     def __init__(self, config_path="config.json"):
         self.cfg_mgr = ConfigManager(config_path)
         self.cfg = self.cfg_mgr.load()
-        
+
         # Configure logging from config file
         global LOG
         LOG = configure_logging(self.cfg)
@@ -90,7 +91,7 @@ class Supervisor:
 
     def schedule_reboot(self, t_s=1):
         if t_s < 1: t_s = 1
-        self._reboot_at = time.ticks_add(time.ticks_ms(), int(t_s*1000))
+        self._reboot_at = time.ticks_add(time.ticks_ms(), int(t_s * 1000))
 
     def _maybe_reboot(self):
         if self._reboot_at and time.ticks_diff(time.ticks_ms(), self._reboot_at) >= 0:
@@ -98,34 +99,34 @@ class Supervisor:
 
     def _local_minutes(self):
         tz = int(self.cfg.get("schedule", {}).get("tz_offset_min", 0))
-        t = time.time() + tz*60
+        t = time.time() + tz * 60
         lt = time.localtime(t)
-        return lt[3]*60 + lt[4]
+        return lt[3] * 60 + lt[4]
 
     def _init_hw(self):
         from drivers.pca9685 import PCA9685
 
         from drivers.pwm_out import PwmOut
         from drivers.flowsensor.flowsensor import FlowSensor
-        from drivers.flowsensor import types as flowtypes
+        from drivers.flowsensor import flowtypes
         from domain.controllers import SwitchBank
 
         pwm_cfg = self.cfg["outputs"]["pwm"]
-        self.pwm = PwmOut(pwm_cfg["pin"], pwm_cfg.get("freq",20000), pwm_cfg.get("active_low",False))
+        self.pwm = PwmOut(pwm_cfg["pin"], pwm_cfg.get("freq", 20000), pwm_cfg.get("active_low", False))
 
         pca_cfg = self.cfg["outputs"]["pca9685"]
         if pca_cfg.get("enabled", True):
-            i2c = I2C(int(pca_cfg.get("i2c_id",0)),
-                      scl=Pin(int(pca_cfg.get("scl",22))),
-                      sda=Pin(int(pca_cfg.get("sda",21))),
-                      freq=int(pca_cfg.get("freq",400000)))
-            pca = PCA9685(i2c, int(pca_cfg.get("addr",64)))
-            pca.set_pwm_freq(int(pca_cfg.get("pwm_freq",1000)))
-            self.switchbank = SwitchBank(pca, channels=int(pca_cfg.get("channels",16)))
+            i2c = I2C(int(pca_cfg.get("i2c_id", 0)),
+                      scl=Pin(int(pca_cfg.get("scl", 22))),
+                      sda=Pin(int(pca_cfg.get("sda", 21))),
+                      freq=int(pca_cfg.get("freq", 400000)))
+            pca = PCA9685(i2c, int(pca_cfg.get("addr", 64)))
+            pca.set_pwm_freq(int(pca_cfg.get("pwm_freq", 1000)))
+            self.switchbank = SwitchBank(pca, channels=int(pca_cfg.get("channels", 16)))
 
         fcfg = self.cfg["flow"]
-        ppl = getattr(flowtypes, fcfg.get("type","YFS401"), flowtypes.YFS401)
-        self.flow = FlowSensor(ppl, fcfg.get("pin",14))
+        ppl = flowtypes.get(fcfg.get("type", "YFS401"))
+        self.flow = FlowSensor(ppl, fcfg.get("pin", 14))
         self.flow.begin(pullup=bool(fcfg.get("pullup_external", True)))
 
     async def task_wifi(self):
@@ -138,7 +139,7 @@ class Supervisor:
                     consecutive_failures = 0
                     await asyncio.sleep(5)  # Check less frequently when connected
                     continue
-                
+
                 ok = await self.wifi.ensure(self.cfg["wifi"]["ssid"], self.cfg["wifi"]["password"])
                 self.state.ip = self.wifi.ip()
                 if not ok:
@@ -148,13 +149,13 @@ class Supervisor:
                         LOG.warning("WiFi connection failed (attempt %d)" % consecutive_failures)
                 else:
                     consecutive_failures = 0
-                    
+
             except Exception as e:
                 consecutive_failures += 1
                 self.state.last_error = "wifi:%s" % e
                 if LOG and consecutive_failures % 10 == 1:  # Log every 10th failure
                     LOG.exception("WiFi error (attempt %d):" % consecutive_failures, exc_info=e)
-            
+
             # Exponential backoff for failed connections
             if consecutive_failures > 0:
                 delay = min(2 ** min(consecutive_failures // 5, 4), 30)  # Max 30 seconds
@@ -166,7 +167,7 @@ class Supervisor:
         every = int(self.cfg.get("ntp", {}).get("sync_every_s", 21600))
         host = self.cfg.get("ntp", {}).get("host", "pool.ntp.org")
         initial_sync = True
-        
+
         while True:
             if self.wifi.is_connected():
                 success = await ntp_sync(host)
@@ -193,7 +194,7 @@ class Supervisor:
         while True:
             now = time.ticks_ms()
             if time.ticks_diff(now, next_ms) >= 0:
-                self.flow.read(calibration=int(self.cfg["flow"].get("calibration",0)))
+                self.flow.read(calibration=int(self.cfg["flow"].get("calibration", 0)))
                 self.state.flow_lps = self.flow.flow_lps
                 self.state.flow_lpm = self.flow.flow_lpm
                 self.state.volume_l = self.flow.volume_l
@@ -205,11 +206,47 @@ class Supervisor:
         from domain.scheduler import duty_from_schedule
 
         while True:
-            sched = self.cfg.get("schedule", {}).get("pwm", [])
-            duty = duty_from_schedule(sched, self._local_minutes())
-            self.pwm.set(duty)
-            self.state.pwm_duty = duty
+            # Skip schedule if button override is active
+            if not getattr(self, '_pwm_btn_override', False):
+                sched = self.cfg.get("schedule", {}).get("pwm", [])
+                duty = duty_from_schedule(sched, self._local_minutes())
+                self.pwm.set(duty)
+                self.state.pwm_duty = duty
             await asyncio.sleep(1)
+
+    async def task_pwm_test_btn(self):
+        btn_cfg = self.cfg.get("inputs", {}).get("pwm_test_btn", {})
+        pin_num = btn_cfg.get("pin")
+        if not pin_num:
+            LOG.error("PWM test button ping not set")
+            return  # No button configured
+
+        active_low = btn_cfg.get("active_low", True)
+        test_duty = btn_cfg.get("test_duty", 1.0)
+
+        btn = Pin(pin_num, Pin.IN)
+        self._pwm_btn_override = False
+        last_state = btn.value()
+
+        while True:
+            state = btn.value()
+            pressed = (state == 0) if active_low else (state == 1)
+
+            if pressed and not self._pwm_btn_override:
+                # Button just pressed - activate test mode
+                self._pwm_btn_override = True
+                self.pwm.set(test_duty)
+                self.state.pwm_duty = test_duty
+                if LOG:
+                    LOG.debug("PWM test button pressed: duty=%.2f", test_duty)
+            elif not pressed and self._pwm_btn_override:
+                # Button released - return to schedule
+                self._pwm_btn_override = False
+                if LOG:
+                    LOG.debug("PWM test button released")
+
+            last_state = state
+            await asyncio.sleep_ms(50)
 
     async def task_http(self):
         from adapters.http_api import HttpApi
@@ -252,6 +289,8 @@ class Supervisor:
                 await asyncio.sleep(3)
 
             try:
+                from adapters.wamp_bridge import WampBridge
+
                 self.wamp = WampBridge(self.cfg, self.state, self.switchbank, self.cfg_mgr, self.schedule_reboot)
                 if LOG: LOG.info("task_wamp: connecting...")
 
@@ -273,7 +312,7 @@ class Supervisor:
                         await self.wamp.close()
                 except Exception:
                     pass
-                
+
                 # Memory cleanup after disconnect
                 import gc
                 gc.collect()
@@ -322,7 +361,7 @@ class Supervisor:
     async def run(self):
         try:
             LOG.info("Hardware initialized successfully")
-            
+
             asyncio.create_task(self.task_wifi())
             asyncio.create_task(self.task_ntp())
             # Wait for WiFi + NTP (required for TLS cert validation)
@@ -336,14 +375,14 @@ class Supervisor:
             asyncio.create_task(self.task_http())
             asyncio.create_task(self.task_flow())
             asyncio.create_task(self.task_pwm_schedule())
+            asyncio.create_task(self.task_pwm_test_btn())
 
-            
             LOG.info("All tasks started successfully")
 
             loop_count = 0
             while True:
                 self._maybe_reboot()
-                
+
                 # Log memory usage every 60 seconds to track potential leaks
                 loop_count += 1
                 if loop_count % 240 == 0:  # Every 60 seconds (240 * 0.25s)
@@ -355,7 +394,7 @@ class Supervisor:
                     if free_mem < 10000:  # Less than 10KB free
                         if LOG:
                             LOG.error("Low memory warning: %d bytes" % free_mem)
-                
+
                 await asyncio.sleep(0.25)
         except Exception as e:
             if LOG:
