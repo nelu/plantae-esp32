@@ -185,11 +185,11 @@ class WampBridge:
         return False
 
     async def rpc_reset(self, args, kwargs, details):
-        if kwargs.get("flow") or kwargs.get("interval") == "flow":
+        # if kwargs.get("flow") or kwargs.get("interval") == "flow":
             self.state.volume_l = 0.0
             self.state.pulses = 0
             return True
-        return False
+        # return False
 
     async def rpc_reboot(self, args, kwargs, details):
         t = 1

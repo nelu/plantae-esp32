@@ -30,7 +30,7 @@
     "pwm_test_btn": {
       "pin": 35,
       "active_low": false,
-      "test_duty": 1.0
+      "test_duty": 0.5
     }
   },
   "outputs": {
@@ -54,19 +54,20 @@
     "tz_offset_min": 120,
     "pwm": [
       {
-        "start": "08:00",
+        "start": "07:00",
         "end": "20:10",
-        "duty": 0.5
+        "duty": 0.5,
+        "interval": 100,
+        "time_on": 10
       }
     ],
     "dosing": {
-        "start": "08:00",
-        "end": "20:10",
-        "output": "pwm",
-        "quantity": 0.25
-      }
+      "start": "08:00",
+      "end": "20:10",
+      "output": "pwm",
+      "quantity": 0.25
+    }
   },
-
   "logging": {
     "level": "DEBUG",
     "format": "%(asctime)s %(levelname)s:%(name)s:%(message)s",

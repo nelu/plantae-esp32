@@ -8,6 +8,7 @@ from adapters.ntp import sync as ntp_sync
 from adapters.wifi import Wifi
 from app.device_id import get_device_id
 from domain.state import DeviceState
+from lib.logging import Logger
 
 
 def configure_logging(cfg):
@@ -66,7 +67,7 @@ def configure_logging(cfg):
     return LOG
 
 
-LOG = None  # Will be set after config is loaded
+LOG : Logger  # Will be set after config is loaded
 
 
 class Supervisor:
@@ -97,11 +98,22 @@ class Supervisor:
         if self._reboot_at and time.ticks_diff(time.ticks_ms(), self._reboot_at) >= 0:
             reset()
 
-    def _local_minutes(self):
+    def _local_time(self):
+        """
+        Returns:
+          (local_minutes_since_midnight, local_seconds_in_minute)
+        respecting schedule.tz_offset_min.
+        """
         tz = int(self.cfg.get("schedule", {}).get("tz_offset_min", 0))
         t = time.time() + tz * 60
         lt = time.localtime(t)
-        return lt[3] * 60 + lt[4]
+        return (lt[3] * 60 + lt[4], lt[5])
+
+    def _local_minutes(self):
+        # Backward-compatible helper (kept in case other code calls it)
+        m, _s = self._local_time()
+        return m
+
 
     def _init_hw(self):
         from drivers.pca9685 import PCA9685
@@ -209,7 +221,8 @@ class Supervisor:
             # Skip schedule if button override is active
             if not getattr(self, '_pwm_btn_override', False):
                 sched = self.cfg.get("schedule", {}).get("pwm", [])
-                duty = duty_from_schedule(sched, self._local_minutes())
+                mins, secs = self._local_time()
+                duty = duty_from_schedule(sched, mins, secs)
                 self.pwm.set(duty)
                 self.state.pwm_duty = duty
             await asyncio.sleep(1)
