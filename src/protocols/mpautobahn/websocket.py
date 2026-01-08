@@ -75,8 +75,7 @@ class WebSocketClient:
         if headers.get("sec-websocket-protocol", "") != self.subprotocol:
             raise OSError("Subprotocol rejected")
 
-        if LOG:
-            LOG.debug("WS: connected to %s:%d%s sock=%r", self.host, self.port, self.path, self._sock)
+        # LOG.debug("WS: connected to %s:%d%s sock=%r", self.host, self.port, self.path, self._sock)
         self._last_activity_ms = time.ticks_ms()
 
     async def send_ping(self):

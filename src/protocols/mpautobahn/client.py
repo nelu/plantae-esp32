@@ -290,10 +290,10 @@ class AutobahnWS:
             return
         code = msg[0]
         
-        # Debug logging for message handling
+        # Import logging for error handling
         from lib.logging import getLogger
-        debug_log = getLogger("wamp_debug")
-        debug_log.debug("RX WAMP msg: code=%s len=%d msg=%s", code, len(msg), msg)
+        wamp = getLogger("wamp")
+        # wamp.debug("RX WAMP msg: code=%s len=%d msg=%s", code, len(msg), msg)
 
         if code == C.WELCOME:
             self._session_id = msg[1]
@@ -304,24 +304,25 @@ class AutobahnWS:
                     result = self._on_join()
                     _handle_callback_result(result)
                 except Exception as e:
-                    debug_log.error("on_join callback failed: %s", e)
+                    wamp.error("on_join callback failed: %s", e)
+                    pass
 
         elif code == C.SUBSCRIBED:
             req_id, sub_id = msg[1], msg[2]
-            debug_log.debug("SUBSCRIBED: req_id=%s sub_id=%s", req_id, sub_id)
+            # wamp.debug("SUBSCRIBED: req_id=%s sub_id=%s", req_id, sub_id)
             info = self._pending_subscribes.pop(req_id, None)
             if info:
-                debug_log.debug("Storing subscription: sub_id=%s topic=%s", sub_id, info.get("topic"))
+                # wamp.debug("Storing subscription: sub_id=%s topic=%s", sub_id, info.get("topic"))
                 self._subscriptions[str(sub_id)] = info["callback"]
                 if "waiter" in info:
                     info["waiter"].set_result(sub_id)
             else:
-                debug_log.warning("No pending subscription found for req_id: %s", req_id)
+                wamp.warning("No pending subscription found for req_id: %s", req_id)
 
         elif code == C.EVENT:
-            debug_log.debug("Processing EVENT message: %s", msg)
+            # wamp.debug("Processing EVENT message: %s", msg)
             if len(msg) < 3:
-                debug_log.error("Invalid EVENT message format: %s", msg)
+                wamp.error("Invalid EVENT message format: %s", msg)
                 return
                 
             sub_id = msg[1]
@@ -330,34 +331,36 @@ class AutobahnWS:
             args = msg[4] if len(msg) > 4 and isinstance(msg[4], list) else []
             kwargs = msg[5] if len(msg) > 5 and isinstance(msg[5], dict) else {}
             
-            debug_log.debug("EVENT: sub_id=%s pub_id=%s details=%s args=%s kwargs=%s", 
-                          sub_id, pub_id, details, args, kwargs)
+            # wamp.debug("EVENT: sub_id=%s pub_id=%s details=%s args=%s kwargs=%s", 
+            #            sub_id, pub_id, details, args, kwargs)
             
             cb = self._subscriptions.get(str(sub_id))
-            debug_log.debug("Found callback for sub_id %s: %s", sub_id, cb is not None)
-            debug_log.debug("Available subscriptions: %s", list(self._subscriptions.keys()))
+            # wamp.debug("Found callback for sub_id %s: %s", sub_id, cb is not None)
+            # wamp.debug("Available subscriptions: %s", list(self._subscriptions.keys()))
             
             if cb:
                 try:
-                    debug_log.debug("Calling subscription callback...")
-                    debug_log.debug("Callback type: %s", type(cb))
-                    debug_log.debug("Callback: %s", cb)
+                    # wamp.debug("Calling subscription callback...")
+                    # wamp.debug("Callback type: %s", type(cb))
+                    # wamp.debug("Callback: %s", cb)
                     
                     # Call the function and handle async/sync results
                     result = cb(args, kwargs, details)
                     
                     if _handle_callback_result(result):
-                        debug_log.debug("Async subscription callback started successfully")
+                        # wamp.debug("Async subscription callback started successfully")
+                        pass
                     else:
-                        debug_log.debug("Subscription callback completed successfully")
-                        debug_log.debug("Callback result: %s", result)
+                        # wamp.debug("Subscription callback completed successfully")
+                        # wamp.debug("Callback result: %s", result)
+                        pass
                         
                 except Exception as e:
-                    debug_log.error("Subscription callback failed: %s", e)
+                    wamp.error("Subscription callback failed: %s", e)
                     import sys
                     sys.print_exception(e)
             else:
-                debug_log.warning("No callback found for subscription ID: %s", sub_id)
+                wamp.warning("No callback found for subscription ID: %s", sub_id)
 
         elif code == C.REGISTERED:
             req_id, reg_id = msg[1], msg[2]

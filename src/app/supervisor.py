@@ -205,7 +205,7 @@ class Supervisor:
                 success = await ntp_sync(host)
                 self.state.ntp_ok = bool(success)
                 if success:
-                    if LOG: LOG.debug("NTP: synced, time=%d" % time.time())
+                    LOG.info("NTP: synced, time=%d" % time.time())
                     if initial_sync:
                         initial_sync = False
                         # After first successful sync, use normal interval
@@ -213,7 +213,7 @@ class Supervisor:
                     else:
                         await asyncio.sleep(every)
                 else:
-                    if LOG: LOG.debug("NTP: sync failed")
+                    LOG.error("NTP: sync failed")
                     # Retry more frequently if sync fails, especially on startup
                     retry_interval = 10 if initial_sync else 60
                     await asyncio.sleep(retry_interval)
@@ -270,13 +270,13 @@ class Supervisor:
                 self._pwm_btn_override = True
                 self.pwm.set(test_duty)
                 self.state.pwm_duty = test_duty
-                if LOG:
-                    LOG.debug("PWM test button pressed: duty=%.2f", test_duty)
+                # if LOG:
+                #     LOG.debug("PWM test button pressed: duty=%.2f", test_duty)
             elif not pressed and self._pwm_btn_override:
                 # Button released - return to schedule
                 self._pwm_btn_override = False
-                if LOG:
-                    LOG.debug("PWM test button released")
+                # if LOG:
+                #     LOG.debug("PWM test button released")
 
             last_state = state
             await asyncio.sleep_ms(50)
@@ -341,7 +341,8 @@ class Supervisor:
                         await self.wamp.publish_status()
                         pass
                     except Exception as e:
-                        if LOG: LOG.debug("Status publish failed: %s", e)
+                        # if LOG: LOG.debug("Status publish failed: %s", e)
+                        pass
                     await asyncio.sleep(1)  # Publish every 1 seconds
 
                 # Connection loop ended; close cleanly before reconnecting

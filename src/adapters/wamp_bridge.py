@@ -5,7 +5,7 @@ from lib.logging import getLogger
 from version import VERSION, BUILD_DATE
 
 
-LOG = getLogger("wamp_bridge")
+LOG = getLogger(__name__)
 
 class WampBridge:
     def __init__(self, cfg, state, switchbank, config_mgr, schedule_reboot, dosing_controller=None):
@@ -50,7 +50,8 @@ class WampBridge:
         # Add debug logging when connection state changes
         if hasattr(self, '_last_alive_state'):
             if self._last_alive_state != connected:
-                LOG.debug("WAMP connection state changed: %s -> %s", self._last_alive_state, connected)
+                LOG.warn("connection state changed: %s -> %s", self._last_alive_state, connected)
+                pass
         self._last_alive_state = connected
         
         return connected
@@ -64,8 +65,7 @@ class WampBridge:
         self.state.wamp_ok = False
 
         # Minimal, non-spammy: only prints once per attempt here
-        if LOG:
-            LOG.info("WAMP: url=%s realm=%s", url, realm)
+        LOG.info("CONN: url=%s realm=%s", url, realm)
 
         import gc
         gc.collect()
@@ -94,18 +94,15 @@ class WampBridge:
 
         self.state.wamp_ok = True
         self.state.last_error = None
-        if LOG:
-            LOG.info("WAMP connected: %s (%s)" % (url, realm))
+        LOG.info("connected: %s (%s)" % (url, realm))
 
     async def _on_wamp_join(self):
         """Called when WAMP session is joined - set up subscriptions and registrations"""
-        LOG.info("WAMP session joined - setting up subscriptions and registrations")
-        
+
         await self.client.register(self._topic("control"), self.rpc_control)
         await self.client.register(self._topic("calibrate"), self.rpc_calibrate)
         await self.client.register(self._topic("dose"), self.rpc_dose)
         await self.client.register(self._topic("status"), self.rpc_status)
-        await self.client.register(self._topic("test_master"), self.rpc_test_master)
 
         await self.client.register(self._topic("restart"), self.rpc_reboot)
 
@@ -117,10 +114,10 @@ class WampBridge:
             await self.client.register(self._addr_topic("reset", suf), self.rpc_reset)
 
         await self.client.subscribe(self._topic("announce.master"), self.on_master)
-        LOG.info("Subscribed to: %s", self._topic("announce.master"))
+
         await self.publish_announce("announce.online")
         
-        LOG.info("WAMP setup completed successfully")
+        LOG.info("Setup completed")
 
     async def close(self):
         import gc
@@ -147,7 +144,7 @@ class WampBridge:
         gc.collect()
 
     async def publish_announce(self, topic_name, exclude_me=None):
-        LOG.debug("publish_announce: %s", topic_name)
+        # LOG.debug("publish_announce: %s", topic_name)
 
         c = self.client
         if not c:
@@ -168,7 +165,7 @@ class WampBridge:
              options["exclude_me"] = exclude_me
 
         pub_id = await c.publish(self._topic(topic_name), kwargs=payload, acknowledge=True, options=options)
-        LOG.debug("Announce published: %s pub_id=%s", topic_name, pub_id)
+        # LOG.debug("Announce published: %s pub_id=%s", topic_name, pub_id)
 
     async def publish_switch(self, idx, on):
         if not self.client: return
@@ -187,9 +184,7 @@ class WampBridge:
             await self.client.publish(self._addr_topic("status", suf), kwargs=snap)
 
     async def on_master(self, args, kwargs, details):
-        LOG.info("🎯 on_master received: args=%s kwargs=%s", args, kwargs)
         await self.publish_announce("announce.online")
-        LOG.info("📢 on_master: published announce.online")
 
     async def rpc_control(self, args, kwargs, details):
         if "all" in kwargs and self.switchbank:
@@ -246,11 +241,6 @@ class WampBridge:
         else:
             return {"error": "unknown_action", "action": action}
 
-    async def rpc_test_master(self, args, kwargs, details):
-        """Test method to simulate master announcement"""
-        LOG.info("rpc_test_master called - publishing announce.master")
-        await self.client.publish(self._topic("announce.master"), kwargs={"time": time.time()})
-        return {"status": "master_announcement_sent"}
 
     async def rpc_status(self, args, kwargs, details):
         """Get device status including dosing information"""

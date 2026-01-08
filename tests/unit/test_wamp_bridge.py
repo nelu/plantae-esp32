@@ -179,18 +179,7 @@ class TestWampBridge(unittest.TestCase):
         result = await self.bridge.rpc_dose([], {"action": "status"}, {})
         
         self.assertEqual(result, expected_status)
-    
-    async def test_rpc_test_master(self):
-        """Test RPC test master"""
-        self.bridge.client = Mock()
-        self.bridge.client.publish = AsyncMock()
-        
-        result = await self.bridge.rpc_test_master([], {}, {})
-        
-        self.assertEqual(result["status"], "master_announcement_sent")
-        self.bridge.client.publish.assert_called_once()
-        call_args = self.bridge.client.publish.call_args
-        self.assertIn("announce.master", call_args[0][0])
+
     
     async def test_rpc_status(self):
         """Test RPC status"""
