@@ -58,7 +58,7 @@ class AutobahnWS:
         self._on_join = None
         self._connect_error = None
 
-    async def connect(self, timeout_s=20):
+    async def connect(self, timeout_s=10):
         self._connected = False
         self._session_id = None
         self._connect_error = None
@@ -123,8 +123,14 @@ class AutobahnWS:
 
     async def subscribe(self, topic, callback, options=None):
         request_id = self._next_id()
-        self._pending_subscribes[request_id] = (topic, callback)
+        waiter = _RPCWaiter()
+        self._pending_subscribes[request_id] = {"topic": topic, "callback": callback, "waiter": waiter}
         await self._ws.send_text(json.dumps([C.SUBSCRIBE, request_id, options or {}, topic]))
+        try:
+            return await asyncio.wait_for(waiter.wait(), 5.0)
+        except asyncio.TimeoutError:
+            self._pending_subscribes.pop(request_id, None)
+            raise Exception("WAMP SUBSCRIBE timed out")
 
     async def unsubscribe(self, topic):
         pass  # Not implemented to keep footprint small
@@ -234,10 +240,13 @@ class AutobahnWS:
                 except Exception:
                     pass
 
+
+
     async def _handle_wamp_message(self, msg):
         if not isinstance(msg, list) or not msg:
             return
         code = msg[0]
+        # print("DEBUG: RX msg code:", code)
 
         if code == C.WELCOME:
             self._session_id = msg[1]
@@ -255,7 +264,9 @@ class AutobahnWS:
             req_id, sub_id = msg[1], msg[2]
             info = self._pending_subscribes.pop(req_id, None)
             if info:
-                self._subscriptions[str(sub_id)] = info[1]
+                self._subscriptions[str(sub_id)] = info["callback"]
+                if "waiter" in info:
+                    info["waiter"].set_result(sub_id)
 
         elif code == C.EVENT:
             sub_id = msg[1]
@@ -323,6 +334,8 @@ class AutobahnWS:
                 self._pending_calls.pop(req_id).set_error(Exception("WAMP CALL error: %s" % error_uri))
             elif req_type == C.PUBLISH and req_id in self._pending_publishes:
                 self._pending_publishes.pop(req_id).set_error(Exception("WAMP PUBLISH error: %s" % error_uri))
+            elif req_type == C.SUBSCRIBE and req_id in self._pending_subscribes:
+                self._pending_subscribes.pop(req_id)["waiter"].set_error(Exception("WAMP SUBSCRIBE error: %s" % error_uri))
 
         elif code == C.GOODBYE:
             self._connected = False

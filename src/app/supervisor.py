@@ -86,6 +86,7 @@ class Supervisor:
         self.pwm = None
         self.switchbank = None
         self.flow = None
+        self.dosing_controller = None
 
         self._reboot_at = None
         self.wamp = None
@@ -93,10 +94,26 @@ class Supervisor:
     def schedule_reboot(self, t_s=1):
         if t_s < 1: t_s = 1
         self._reboot_at = time.ticks_add(time.ticks_ms(), int(t_s * 1000))
+        if LOG:
+            LOG.info("schedule_reboot: %s" % self._reboot_at)
 
-    def _maybe_reboot(self):
+
+    async def _maybe_reboot(self):
         if self._reboot_at and time.ticks_diff(time.ticks_ms(), self._reboot_at) >= 0:
-            reset()
+            if LOG:
+                LOG.info("reset() triggered")
+            
+            # Attempt consistent graceful shutdown
+            if self.wamp:
+                try:
+                    # Send announce.offline before reboot
+                    await self.wamp.publish_announce("announce.offline")
+                except Exception as e:
+                    if LOG: LOG.error("Failed to send offline announce: %s", e)
+
+            # Give some time for logs and network buffers to flush
+            await asyncio.sleep(2)
+            #reset()
 
     def _local_time(self):
         """
@@ -119,8 +136,7 @@ class Supervisor:
         from drivers.pca9685 import PCA9685
 
         from drivers.pwm_out import PwmOut
-        from drivers.flowsensor.flowsensor import FlowSensor
-        from drivers.flowsensor import flowtypes
+        from drivers.flowsensor import FlowSensor, flowtypes
         from domain.controllers import SwitchBank
 
         pwm_cfg = self.cfg["outputs"]["pwm"]
@@ -140,6 +156,10 @@ class Supervisor:
         ppl = flowtypes.get(fcfg.get("type", "YFS401"))
         self.flow = FlowSensor(ppl, fcfg.get("pin", 14))
         self.flow.begin(pullup=bool(fcfg.get("pullup_external", True)))
+
+        # Initialize dosing controller
+        from domain.dosing import DosingController
+        self.dosing_controller = DosingController(self.flow, self.pwm, self.cfg)
 
     async def task_wifi(self):
         consecutive_failures = 0
@@ -218,8 +238,8 @@ class Supervisor:
         from domain.scheduler import duty_from_schedule
 
         while True:
-            # Skip schedule if button override is active
-            if not getattr(self, '_pwm_btn_override', False):
+            # Skip schedule if button override is active or dosing is active
+            if not getattr(self, '_pwm_btn_override', False) and not (self.dosing_controller and self.dosing_controller.is_dosing):
                 sched = self.cfg.get("schedule", {}).get("pwm", [])
                 mins, secs = self._local_time()
                 duty = duty_from_schedule(sched, mins, secs)
@@ -304,7 +324,7 @@ class Supervisor:
             try:
                 from adapters.wamp_bridge import WampBridge
 
-                self.wamp = WampBridge(self.cfg, self.state, self.switchbank, self.cfg_mgr, self.schedule_reboot)
+                self.wamp = WampBridge(self.cfg, self.state, self.switchbank, self.cfg_mgr, self.schedule_reboot, self.dosing_controller)
                 if LOG: LOG.info("task_wamp: connecting...")
 
                 import gc
@@ -315,11 +335,16 @@ class Supervisor:
                 backoff = 1
 
                 while self.wamp and self.wamp.is_alive():
-                    # await self.wamp.publish_sense()
-                    await self.wamp.publish_status()
-                    await asyncio.sleep(1)
+                    # Periodically publish status to keep connection active
+                    try:
+                        await self.wamp.publish_sense()
+                        await self.wamp.publish_status()
+                    except Exception as e:
+                        if LOG: LOG.debug("Status publish failed: %s", e)
+                    await asyncio.sleep(1)  # Publish every 10 seconds
 
                 # Connection loop ended; close cleanly before reconnecting
+                if LOG: LOG.warning("WAMP connection lost, reconnecting...")
                 try:
                     if self.wamp:
                         await self.wamp.close()
@@ -371,6 +396,16 @@ class Supervisor:
 
                 backoff = 2 * backoff if backoff < 60 else 60
 
+    async def task_dosing(self):
+        """Update dosing controller regularly"""
+        while True:
+            if self.dosing_controller:
+                mins, _secs = self._local_time()
+                await self.dosing_controller.update(mins)
+                # Update state with current dosing status
+                self.state.dosing_status = self.dosing_controller.get_dose_status()
+            await asyncio.sleep(0.5)  # Update twice per second for precision
+
     async def run(self):
         try:
             LOG.info("Hardware initialized successfully")
@@ -389,12 +424,13 @@ class Supervisor:
             asyncio.create_task(self.task_flow())
             asyncio.create_task(self.task_pwm_schedule())
             asyncio.create_task(self.task_pwm_test_btn())
+            asyncio.create_task(self.task_dosing())
 
             LOG.info("All tasks started successfully")
 
             loop_count = 0
             while True:
-                self._maybe_reboot()
+                await self._maybe_reboot()
 
                 # Log memory usage every 60 seconds to track potential leaks
                 loop_count += 1
