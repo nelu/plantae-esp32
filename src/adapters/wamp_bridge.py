@@ -86,19 +86,30 @@ class WampBridge:
             idle_timeout_s=ka.get("idle_timeout_s"),
         )
 
+        # Set up the on_join callback to handle subscriptions/registrations
+        self.client.on_join(self._on_wamp_join)
+        
         await self.client.connect()
         await asyncio.sleep_ms(100)
 
+        self.state.wamp_ok = True
+        self.state.last_error = None
+        if LOG:
+            LOG.info("WAMP connected: %s (%s)" % (url, realm))
+
+    async def _on_wamp_join(self):
+        """Called when WAMP session is joined - set up subscriptions and registrations"""
+        LOG.info("WAMP session joined - setting up subscriptions and registrations")
+        
         await self.client.register(self._topic("control"), self.rpc_control)
         await self.client.register(self._topic("calibrate"), self.rpc_calibrate)
         await self.client.register(self._topic("dose"), self.rpc_dose)
         await self.client.register(self._topic("status"), self.rpc_status)
         await self.client.register(self._topic("test_master"), self.rpc_test_master)
 
-        await self.client.register(self._topic("restart"), self.rpc_rebootsexy)
+        await self.client.register(self._topic("restart"), self.rpc_reboot)
 
         for suf in self._addr_suffixes():
-            LOG.debug('')
             await self.client.register(self._addr_topic("calibrate", suf), self.rpc_calibrate)
             await self.client.register(self._addr_topic("dose", suf), self.rpc_dose)
             await self.client.register(self._addr_topic("status", suf), self.rpc_status)
@@ -108,11 +119,8 @@ class WampBridge:
         await self.client.subscribe(self._topic("announce.master"), self.on_master)
         LOG.info("Subscribed to: %s", self._topic("announce.master"))
         await self.publish_announce("announce.online")
-
-        self.state.wamp_ok = True
-        self.state.last_error = None
-        if LOG:
-            LOG.info("WAMP connected: %s (%s)" % (url, realm))
+        
+        LOG.info("WAMP setup completed successfully")
 
     async def close(self):
         import gc
@@ -179,8 +187,9 @@ class WampBridge:
             await self.client.publish(self._addr_topic("status", suf), kwargs=snap)
 
     async def on_master(self, args, kwargs, details):
-        LOG.debug("on_master received: args=%s kwargs=%s", args, kwargs)
+        LOG.info("🎯 on_master received: args=%s kwargs=%s", args, kwargs)
         await self.publish_announce("announce.online")
+        LOG.info("📢 on_master: published announce.online")
 
     async def rpc_control(self, args, kwargs, details):
         if "all" in kwargs and self.switchbank:

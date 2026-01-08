@@ -339,9 +339,10 @@ class Supervisor:
                     try:
                         await self.wamp.publish_sense()
                         await self.wamp.publish_status()
+                        pass
                     except Exception as e:
                         if LOG: LOG.debug("Status publish failed: %s", e)
-                    await asyncio.sleep(1)  # Publish every 10 seconds
+                    await asyncio.sleep(1)  # Publish every 1 seconds
 
                 # Connection loop ended; close cleanly before reconnecting
                 if LOG: LOG.warning("WAMP connection lost, reconnecting...")

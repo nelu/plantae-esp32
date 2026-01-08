@@ -74,6 +74,7 @@
     "date_format": "%H:%M:%S",
     "loggers": {
       "root": "DEBUG",
+      "wamp_debug": "INFO",
       "wamp": "DEBUG",
       "wamp_bridge": "DEBUG",
       "ntp": "DEBUG"

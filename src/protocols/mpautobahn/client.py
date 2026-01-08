@@ -1,9 +1,52 @@
 """WAMP client for MicroPython using WebSocket transport."""
 import time
-import uasyncio as asyncio
+try:
+    import uasyncio as asyncio
+except ImportError:
+    import asyncio
 import ujson as json
 from .websocket import WebSocketClient
 from . import constants as C
+
+
+def _handle_callback_result(result):
+    """
+    Handle the result of calling a callback function.
+    Returns True if the result was async and a task was created, False otherwise.
+    
+    In MicroPython, async functions return generators when called as regular functions.
+    In regular Python, async functions return coroutines.
+    """
+    if hasattr(result, '__await__'):
+        # Regular Python coroutine
+        asyncio.create_task(result)
+        return True
+    elif hasattr(result, '__next__'):
+        # MicroPython async function (returns generator)
+        asyncio.create_task(result)
+        return True
+    else:
+        # Regular function result
+        return False
+
+
+async def _handle_callback_result_await(result):
+    """
+    Handle the result of calling a callback function that needs to be awaited.
+    Returns the final result after awaiting if necessary.
+    
+    In MicroPython, async functions return generators when called as regular functions.
+    In regular Python, async functions return coroutines.
+    """
+    if hasattr(result, '__await__'):
+        # Regular Python coroutine
+        return await result
+    elif hasattr(result, '__next__'):
+        # MicroPython async function (returns generator)
+        return await result
+    else:
+        # Regular function result
+        return result
 
 
 class _RPCWaiter:
@@ -246,42 +289,75 @@ class AutobahnWS:
         if not isinstance(msg, list) or not msg:
             return
         code = msg[0]
-        # print("DEBUG: RX msg code:", code)
+        
+        # Debug logging for message handling
+        from lib.logging import getLogger
+        debug_log = getLogger("wamp_debug")
+        debug_log.debug("RX WAMP msg: code=%s len=%d msg=%s", code, len(msg), msg)
 
         if code == C.WELCOME:
             self._session_id = msg[1]
             self._connected = True
             if self._on_join:
-                if asyncio.iscoroutinefunction(self._on_join):
-                    asyncio.create_task(self._on_join())
-                else:
-                    try:
-                        self._on_join()
-                    except Exception:
-                        pass
+                try:
+                    # Call the function and check if we get a coroutine
+                    result = self._on_join()
+                    _handle_callback_result(result)
+                except Exception as e:
+                    debug_log.error("on_join callback failed: %s", e)
 
         elif code == C.SUBSCRIBED:
             req_id, sub_id = msg[1], msg[2]
+            debug_log.debug("SUBSCRIBED: req_id=%s sub_id=%s", req_id, sub_id)
             info = self._pending_subscribes.pop(req_id, None)
             if info:
+                debug_log.debug("Storing subscription: sub_id=%s topic=%s", sub_id, info.get("topic"))
                 self._subscriptions[str(sub_id)] = info["callback"]
                 if "waiter" in info:
                     info["waiter"].set_result(sub_id)
+            else:
+                debug_log.warning("No pending subscription found for req_id: %s", req_id)
 
         elif code == C.EVENT:
+            debug_log.debug("Processing EVENT message: %s", msg)
+            if len(msg) < 3:
+                debug_log.error("Invalid EVENT message format: %s", msg)
+                return
+                
             sub_id = msg[1]
+            pub_id = msg[2]  # Publication ID
             details = msg[3] if len(msg) > 3 and isinstance(msg[3], dict) else {}
             args = msg[4] if len(msg) > 4 and isinstance(msg[4], list) else []
             kwargs = msg[5] if len(msg) > 5 and isinstance(msg[5], dict) else {}
+            
+            debug_log.debug("EVENT: sub_id=%s pub_id=%s details=%s args=%s kwargs=%s", 
+                          sub_id, pub_id, details, args, kwargs)
+            
             cb = self._subscriptions.get(str(sub_id))
+            debug_log.debug("Found callback for sub_id %s: %s", sub_id, cb is not None)
+            debug_log.debug("Available subscriptions: %s", list(self._subscriptions.keys()))
+            
             if cb:
                 try:
-                    if asyncio.iscoroutinefunction(cb):
-                        asyncio.create_task(cb(args, kwargs, details))
+                    debug_log.debug("Calling subscription callback...")
+                    debug_log.debug("Callback type: %s", type(cb))
+                    debug_log.debug("Callback: %s", cb)
+                    
+                    # Call the function and handle async/sync results
+                    result = cb(args, kwargs, details)
+                    
+                    if _handle_callback_result(result):
+                        debug_log.debug("Async subscription callback started successfully")
                     else:
-                        cb(args, kwargs, details)
-                except Exception:
-                    pass
+                        debug_log.debug("Subscription callback completed successfully")
+                        debug_log.debug("Callback result: %s", result)
+                        
+                except Exception as e:
+                    debug_log.error("Subscription callback failed: %s", e)
+                    import sys
+                    sys.print_exception(e)
+            else:
+                debug_log.warning("No callback found for subscription ID: %s", sub_id)
 
         elif code == C.REGISTERED:
             req_id, reg_id = msg[1], msg[2]
@@ -299,10 +375,9 @@ class AutobahnWS:
             result = None
             if cb:
                 try:
-                    if asyncio.iscoroutinefunction(cb):
-                        result = await cb(args, kwargs, details)
-                    else:
-                        result = cb(args, kwargs, details)
+                    # Call the function and handle async/sync results
+                    result = cb(args, kwargs, details)
+                    result = await _handle_callback_result_await(result)
                 except Exception as exc:
                     err_msg = [C.ERROR, C.INVOCATION, request_id, {}, ["wamp.error.runtime_error"], {"message": str(exc)}]
                     await self._ws.send_text(json.dumps(err_msg))
