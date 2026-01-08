@@ -57,6 +57,9 @@ class WampBridge:
         return connected
 
     async def connect(self):
+        import gc
+        from lib.memory_optimizer import MemoryOptimizer
+        
         url = self.cfg["wamp"]["url"]
         realm = self.cfg["wamp"].get("realm", "realm1")
         ka = self.cfg.get("wamp", {}).get("keepalive", {})
@@ -64,11 +67,15 @@ class WampBridge:
         self.client = None
         self.state.wamp_ok = False
 
-        # Minimal, non-spammy: only prints once per attempt here
-        LOG.info("CONN: url=%s realm=%s", url, realm)
+        # Check memory before attempting connection
+        mem_info = MemoryOptimizer.get_memory_info()
+        if mem_info:
+            LOG.info("CONN: url=%s realm=%s mem_free=%s", url, realm, mem_info.get('free', 'unknown'))
+        else:
+            LOG.info("CONN: url=%s realm=%s", url, realm)
 
-        import gc
-        gc.collect()
+        # Use memory optimizer for connection preparation
+        await MemoryOptimizer.prepare_for_ssl()
 
         # Parse ws:// / wss:// URL without urllib (reuse helper from ws_async)
         scheme, host, port, path = parse_ws_url(url)

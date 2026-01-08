@@ -102,14 +102,35 @@ class AutobahnWS:
         self._connect_error = None
 
     async def connect(self, timeout_s=10):
+        import gc
+        
+        # Aggressive memory cleanup before connection
         self._connected = False
         self._session_id = None
         self._connect_error = None
+        
+        # Clear any existing state
+        self._pending_subscribes.clear()
+        self._subscriptions.clear()
+        self._pending_registers.clear()
+        self._registrations.clear()
+        self._pending_calls.clear()
+        self._pending_publishes.clear()
+        
+        gc.collect()
+        await asyncio.sleep_ms(50)  # Let GC settle
 
         await self._ws.connect()
 
+        # Build HELLO message with minimal allocations
         details = {"roles": {"publisher": {}, "subscriber": {}, "caller": {}, "callee": {}}}
-        await self._ws.send_text(json.dumps([C.HELLO, self.realm, details]))
+        hello_msg = [C.HELLO, self.realm, details]
+        hello_json = json.dumps(hello_msg)
+        await self._ws.send_text(hello_json)
+        
+        # Clean up immediately
+        del details, hello_msg, hello_json
+        gc.collect()
 
         if self._recv_task:
             try:
@@ -195,9 +216,12 @@ class AutobahnWS:
         return await waiter.wait()
 
     async def close(self):
+        import gc
+        
         try:
             if self._connected:
-                await self._ws.send_text(json.dumps([C.GOODBYE, {}, "wamp.close.normal"]))
+                goodbye_msg = json.dumps([C.GOODBYE, {}, "wamp.close.normal"])
+                await self._ws.send_text(goodbye_msg)
         except Exception:
             pass
 
@@ -210,6 +234,16 @@ class AutobahnWS:
             self._keepalive_task = None
 
         await self._ws.close()
+        
+        # Clear all state to free memory
+        self._pending_subscribes.clear()
+        self._subscriptions.clear()
+        self._pending_registers.clear()
+        self._registrations.clear()
+        self._pending_calls.clear()
+        self._pending_publishes.clear()
+        
+        gc.collect()
 
     def _next_id(self):
         rid = self._next_request_id

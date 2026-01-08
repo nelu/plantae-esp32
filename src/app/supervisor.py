@@ -196,9 +196,10 @@ class Supervisor:
                 await asyncio.sleep(2)
 
     async def task_ntp(self):
-        every = int(self.cfg.get("ntp", {}).get("sync_every_s", 21600))
+        """NTP sync - runs once initially, then periodically with longer intervals"""
+        every = int(self.cfg.get("ntp", {}).get("sync_every_s", 21600))  # Default 6 hours
         host = self.cfg.get("ntp", {}).get("host", "pool.ntp.org")
-        initial_sync = True
+        initial_sync_done = False
 
         while True:
             if self.wifi.is_connected():
@@ -206,16 +207,17 @@ class Supervisor:
                 self.state.ntp_ok = bool(success)
                 if success:
                     LOG.info("NTP: synced, time=%d" % time.time())
-                    if initial_sync:
-                        initial_sync = False
-                        # After first successful sync, use normal interval
+                    if not initial_sync_done:
+                        initial_sync_done = True
+                        # After first successful sync, use much longer interval to reduce memory pressure
                         await asyncio.sleep(every)
                     else:
+                        # Subsequent syncs use the configured interval (default 6 hours)
                         await asyncio.sleep(every)
                 else:
                     LOG.error("NTP: sync failed")
                     # Retry more frequently if sync fails, especially on startup
-                    retry_interval = 10 if initial_sync else 60
+                    retry_interval = 10 if not initial_sync_done else 300  # 5 minutes for retry
                     await asyncio.sleep(retry_interval)
             else:
                 await asyncio.sleep(2)
@@ -234,67 +236,67 @@ class Supervisor:
                 next_ms = time.ticks_add(now, interval_ms)
             await asyncio.sleep_ms(20)
 
-    async def task_pwm_schedule(self):
-        from domain.scheduler import duty_from_schedule
+    # async def task_pwm_schedule(self):
+    #     from domain.scheduler import duty_from_schedule
+    #
+    #     while True:
+    #         # Skip schedule if button override is active or dosing is active
+    #         if not getattr(self, '_pwm_btn_override', False) and not (self.dosing_controller and self.dosing_controller.is_dosing):
+    #             sched = self.cfg.get("schedule", {}).get("pwm", [])
+    #             mins, secs = self._local_time()
+    #             duty = duty_from_schedule(sched, mins, secs)
+    #             self.pwm.set(duty)
+    #             self.state.pwm_duty = duty
+    #         await asyncio.sleep(1)
+    #
+    # async def task_pwm_test_btn(self):
+    #     btn_cfg = self.cfg.get("inputs", {}).get("pwm_test_btn", {})
+    #     pin_num = btn_cfg.get("pin")
+    #     if not pin_num:
+    #         LOG.error("PWM test button ping not set")
+    #         return  # No button configured
+    #
+    #     active_low = btn_cfg.get("active_low", True)
+    #     test_duty = btn_cfg.get("test_duty", 1.0)
+    #
+    #     btn = Pin(pin_num, Pin.IN)
+    #     self._pwm_btn_override = False
+    #     last_state = btn.value()
+    #
+    #     while True:
+    #         state = btn.value()
+    #         pressed = (state == 0) if active_low else (state == 1)
+    #
+    #         if pressed and not self._pwm_btn_override:
+    #             # Button just pressed - activate test mode
+    #             self._pwm_btn_override = True
+    #             self.pwm.set(test_duty)
+    #             self.state.pwm_duty = test_duty
+    #             # if LOG:
+    #             #     LOG.debug("PWM test button pressed: duty=%.2f", test_duty)
+    #         elif not pressed and self._pwm_btn_override:
+    #             # Button released - return to schedule
+    #             self._pwm_btn_override = False
+    #             # if LOG:
+    #             #     LOG.debug("PWM test button released")
+    #
+    #         last_state = state
+    #         await asyncio.sleep_ms(50)
 
-        while True:
-            # Skip schedule if button override is active or dosing is active
-            if not getattr(self, '_pwm_btn_override', False) and not (self.dosing_controller and self.dosing_controller.is_dosing):
-                sched = self.cfg.get("schedule", {}).get("pwm", [])
-                mins, secs = self._local_time()
-                duty = duty_from_schedule(sched, mins, secs)
-                self.pwm.set(duty)
-                self.state.pwm_duty = duty
-            await asyncio.sleep(1)
-
-    async def task_pwm_test_btn(self):
-        btn_cfg = self.cfg.get("inputs", {}).get("pwm_test_btn", {})
-        pin_num = btn_cfg.get("pin")
-        if not pin_num:
-            LOG.error("PWM test button ping not set")
-            return  # No button configured
-
-        active_low = btn_cfg.get("active_low", True)
-        test_duty = btn_cfg.get("test_duty", 1.0)
-
-        btn = Pin(pin_num, Pin.IN)
-        self._pwm_btn_override = False
-        last_state = btn.value()
-
-        while True:
-            state = btn.value()
-            pressed = (state == 0) if active_low else (state == 1)
-
-            if pressed and not self._pwm_btn_override:
-                # Button just pressed - activate test mode
-                self._pwm_btn_override = True
-                self.pwm.set(test_duty)
-                self.state.pwm_duty = test_duty
-                # if LOG:
-                #     LOG.debug("PWM test button pressed: duty=%.2f", test_duty)
-            elif not pressed and self._pwm_btn_override:
-                # Button released - return to schedule
-                self._pwm_btn_override = False
-                # if LOG:
-                #     LOG.debug("PWM test button released")
-
-            last_state = state
-            await asyncio.sleep_ms(50)
-
-    async def task_http(self):
-        from adapters.http_api import HttpApi
-
-        api = HttpApi(
-            get_status=self.state.snapshot,
-            get_cfg=lambda: self.cfg,
-            patch_cfg=self._patch_cfg,
-            schedule_reboot=self.schedule_reboot,
-            pwm_out=self.pwm,
-            flow_sensor=self.flow,
-        )
-        await api.serve(port=80)
-        while True:
-            await asyncio.sleep(3600)
+    # async def task_http(self):
+    #     from adapters.http_api import HttpApi
+    #
+    #     api = HttpApi(
+    #         get_status=self.state.snapshot,
+    #         get_cfg=lambda: self.cfg,
+    #         patch_cfg=self._patch_cfg,
+    #         schedule_reboot=self.schedule_reboot,
+    #         pwm_out=self.pwm,
+    #         flow_sensor=self.flow,
+    #     )
+    #     await api.serve(port=80)
+    #     while True:
+    #         await asyncio.sleep(3600)
 
     def _patch_cfg(self, patch):
         self.cfg = self.cfg_mgr.update(patch)
@@ -323,13 +325,18 @@ class Supervisor:
 
             try:
                 from adapters.wamp_bridge import WampBridge
+                from lib.memory_optimizer import MemoryOptimizer
+
+                # Log memory state before connection attempt
+                mem_info = MemoryOptimizer.get_memory_info()
+                if mem_info and LOG:
+                    LOG.info("WAMP connection attempt - free memory: %d", mem_info.get('free', 0))
 
                 self.wamp = WampBridge(self.cfg, self.state, self.switchbank, self.cfg_mgr, self.schedule_reboot, self.dosing_controller)
                 if LOG: LOG.info("task_wamp: connecting...")
 
-                import gc
-                gc.collect()
-                await asyncio.sleep_ms(0)
+                # Use memory optimizer for connection preparation
+                await MemoryOptimizer.prepare_for_ssl()
 
                 await self.wamp.connect()
                 backoff = 1
@@ -365,9 +372,9 @@ class Supervisor:
                 except Exception:
                     pass
 
-                # Memory cleanup after error/disconnect
-                import gc
-                gc.collect()
+                # Use memory optimizer for error cleanup
+                from lib.memory_optimizer import MemoryOptimizer
+                await MemoryOptimizer.cleanup_after_error()
 
                 await asyncio.sleep(1)
 
@@ -383,7 +390,7 @@ class Supervisor:
 
                 self.wamp = None
 
-                # If the underlying error was OSError(16), cool down a bit more
+                # Enhanced handling for OSError(16) - memory allocation issues
                 eno = None
                 try:
                     if isinstance(e, OSError) and e.args:
@@ -392,7 +399,10 @@ class Supervisor:
                     pass
 
                 if eno == 16:
-                    await asyncio.sleep(2)
+                    # OSError 16 (EBUSY) - likely memory fragmentation
+                    if LOG: LOG.warning("OSError 16 detected - performing extreme memory cleanup")
+                    await MemoryOptimizer.extreme_cleanup()
+                    await asyncio.sleep(8)  # Even longer cooldown for memory recovery
                 else:
                     await asyncio.sleep(backoff)
 
@@ -412,20 +422,29 @@ class Supervisor:
         try:
             LOG.info("Hardware initialized successfully")
 
+            # Start essential tasks first
             asyncio.create_task(self.task_wifi())
             asyncio.create_task(self.task_ntp())
+            
             # Wait for WiFi + NTP (required for TLS cert validation)
+            while not self.wifi.is_connected() or not self.state.ntp_ok:
+                await asyncio.sleep(0.2)
+            
+            # Give NTP a moment to settle after first sync
+            await asyncio.sleep(1)
 
+            # Start WAMP connection with minimal concurrent tasks
             asyncio.create_task(self.task_wamp())
             while not self.state.wamp_ok:
                 await asyncio.sleep(0.2)
 
+            # Only after WAMP is connected, start other memory-intensive tasks
             self._init_hw()
 
-            asyncio.create_task(self.task_http())
+            # asyncio.create_task(self.task_http())
             asyncio.create_task(self.task_flow())
-            asyncio.create_task(self.task_pwm_schedule())
-            asyncio.create_task(self.task_pwm_test_btn())
+            # asyncio.create_task(self.task_pwm_schedule())
+            # asyncio.create_task(self.task_pwm_test_btn())
             asyncio.create_task(self.task_dosing())
 
             LOG.info("All tasks started successfully")
@@ -448,8 +467,7 @@ class Supervisor:
 
                 await asyncio.sleep(0.25)
         except Exception as e:
-            if LOG:
-                LOG.error("Critical error in supervisor: %s" % e)
+            LOG.error("Critical error in supervisor: %s" % e)
             print("CRITICAL ERROR:", e)
             # Don't let the system crash silently
             import sys

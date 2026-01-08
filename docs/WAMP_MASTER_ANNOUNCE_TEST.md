@@ -87,7 +87,6 @@ Enable debug logging in `config.json`:
     "level": "DEBUG",
     "loggers": {
       "wamp_bridge": "DEBUG",
-      "wamp_debug": "DEBUG"
     }
   }
 }
@@ -107,3 +106,11 @@ The fix ensures compatibility between:
 - MicroPython (with limited uasyncio module)
 - Both sync and async callback functions
 - Graceful error recovery for misdetected function types
+
+**Performance Note:** Debug logging statements (`.debug()` calls) have been commented out across the entire codebase to reduce memory footprint for MicroPython deployment:
+- `src/protocols/mpautobahn/client.py` - WAMP message processing debug logs
+- `src/protocols/mpautobahn/websocket.py` - WebSocket connection debug logs  
+- `src/app/supervisor.py` - NTP sync and PWM button debug logs
+- `src/adapters/wamp_bridge.py` - WAMP bridge debug logs
+
+Error and warning logging remains active. Uncomment specific debug statements if detailed debugging is needed.

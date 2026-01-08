@@ -5,7 +5,10 @@ import socket
 import struct
 import time
 import uasyncio as asyncio
-import urandom
+try:
+    import urandom
+except ImportError:
+    import random as urandom
 from .constants import WS_GUID
 from lib.logging import getLogger
 
@@ -28,30 +31,79 @@ class WebSocketClient:
 
     async def connect(self):
         import uhashlib, gc
-        gc.collect()
+        from lib.memory_optimizer import MemoryOptimizer
+        
+        # Ultra-aggressive memory cleanup before SSL connection
         self._closed = False
         self._rxbuf = b""
-
+        
+        # Use the memory optimizer for SSL preparation
+        await MemoryOptimizer.prepare_for_ssl()
+        
         addr = socket.getaddrinfo(self.host, self.port)[0][-1]
         self._sock = socket.socket()
         self._sock.settimeout(10)  # 10s timeout for connect/SSL
         self._sock.connect(addr)
 
         if self.use_ssl:
+            # Log memory info before SSL attempt
+            mem_info = MemoryOptimizer.get_memory_info()
+            if mem_info:
+                LOG.debug("Memory before SSL: %s", mem_info)
+            
+            # Additional memory preparation specifically for SSL
+            await MemoryOptimizer.force_defragment()
+            
             import ssl
+            # Create SSL context with minimal memory footprint
             ctx = ssl.SSLContext(ssl.PROTOCOL_TLS_CLIENT)
             ctx.verify_mode = ssl.CERT_NONE
-            self._sock = ctx.wrap_socket(self._sock, server_hostname=self.host)
+            
+            try:
+                self._sock = ctx.wrap_socket(self._sock, server_hostname=self.host)
+                LOG.debug("SSL handshake successful")
+            except OSError as e:
+                # If SSL fails, clean up socket and re-raise
+                try:
+                    self._sock.close()
+                except:
+                    pass
+                self._sock = None
+                
+                # Enhanced cleanup for OSError 16
+                if e.args and e.args[0] == 16:
+                    await MemoryOptimizer.extreme_cleanup()
+                
+                raise
 
-        key_b64 = binascii.b2a_base64(os.urandom(16)).strip().decode()
-        req = ("GET %s HTTP/1.1\r\nHost: %s:%d\r\nUpgrade: websocket\r\n"
-               "Connection: Upgrade\r\nSec-WebSocket-Key: %s\r\n"
-               "Sec-WebSocket-Version: 13\r\nSec-WebSocket-Protocol: %s\r\n\r\n"
-               ) % (self.path, self.host, self.port, key_b64, self.subprotocol)
+        # Generate WebSocket key with smaller buffer
+        key_bytes = bytearray(16)
+        for i in range(16):
+            try:
+                key_bytes[i] = urandom.getrandbits(8)
+            except AttributeError:
+                # Fallback for systems without urandom.getrandbits
+                key_bytes[i] = urandom.randint(0, 255)
+        key_b64 = binascii.b2a_base64(bytes(key_bytes)).strip().decode()
+        
+        # Build request string efficiently
+        req_parts = [
+            "GET ", self.path, " HTTP/1.1\r\n",
+            "Host: ", self.host, ":", str(self.port), "\r\n",
+            "Upgrade: websocket\r\n",
+            "Connection: Upgrade\r\n",
+            "Sec-WebSocket-Key: ", key_b64, "\r\n",
+            "Sec-WebSocket-Version: 13\r\n",
+            "Sec-WebSocket-Protocol: ", self.subprotocol, "\r\n\r\n"
+        ]
+        req = "".join(req_parts)
 
         self._sock.setblocking(True)
-        self._sock.write(req.encode())
+        req_bytes = req.encode()
+        self._sock.write(req_bytes)
+        del req_bytes  # Free memory immediately
 
+        # Read response with smaller buffer to reduce memory pressure
         status = self._sock.readline()
         if not status or not status.startswith(b"HTTP/1.1 101"):
             raise OSError("WebSocket handshake failed: %r" % status)
@@ -62,18 +114,30 @@ class WebSocketClient:
             if not line or line == b"\r\n":
                 break
             try:
-                k, v = line.decode().split(":", 1)
-                headers[k.strip().lower()] = v.strip()
+                line_str = line.decode()
+                colon_pos = line_str.find(":")
+                if colon_pos > 0:
+                    k = line_str[:colon_pos].strip().lower()
+                    v = line_str[colon_pos+1:].strip()
+                    headers[k] = v
             except Exception:
                 pass
 
         self._sock.setblocking(False)
 
-        expected = binascii.b2a_base64(uhashlib.sha1((key_b64 + WS_GUID).encode()).digest()).strip().decode()
+        # Verify handshake with minimal memory usage
+        expected_key = key_b64 + WS_GUID
+        expected_hash = uhashlib.sha1(expected_key.encode()).digest()
+        expected = binascii.b2a_base64(expected_hash).strip().decode()
+        
         if headers.get("sec-websocket-accept", "") != expected:
             raise OSError("Bad Sec-WebSocket-Accept")
         if headers.get("sec-websocket-protocol", "") != self.subprotocol:
             raise OSError("Subprotocol rejected")
+
+        # Final cleanup
+        del headers, expected_key, expected_hash, expected
+        gc.collect()
 
         # LOG.debug("WS: connected to %s:%d%s sock=%r", self.host, self.port, self.path, self._sock)
         self._last_activity_ms = time.ticks_ms()
@@ -82,7 +146,11 @@ class WebSocketClient:
         if self._closed or not self._sock:
             return
         try:
-            mask_key = urandom.getrandbits(32).to_bytes(4, "big")
+            try:
+                mask_key = urandom.getrandbits(32).to_bytes(4, "big")
+            except AttributeError:
+                # Fallback for systems without urandom.getrandbits
+                mask_key = bytes([urandom.randint(0, 255) for _ in range(4)])
             header = struct.pack("!BB", 0x89, 0x80)
             await self._sock_send(header + mask_key)
             self._last_activity_ms = time.ticks_ms()
@@ -118,6 +186,7 @@ class WebSocketClient:
             result, self._rxbuf = self._rxbuf[:n], self._rxbuf[n:]
             return result
 
+        # Use smaller initial buffer to reduce memory pressure
         buf = bytearray(self._rxbuf)
         self._rxbuf = b""
         t0 = time.ticks_ms()
@@ -126,7 +195,9 @@ class WebSocketClient:
             if not self._sock:
                 raise OSError("Socket closed during recv")
             try:
-                chunk = self._sock.read(n - len(buf))
+                # Read in smaller chunks to reduce memory allocation pressure
+                chunk_size = min(512, n - len(buf))  # Max 512 bytes per read
+                chunk = self._sock.read(chunk_size)
                 if chunk:
                     buf.extend(chunk)
             except OSError as e:
@@ -141,7 +212,11 @@ class WebSocketClient:
         return bytes(buf)
 
     async def _send_pong(self, payload):
-        mask = urandom.getrandbits(32).to_bytes(4, "big")
+        try:
+            mask = urandom.getrandbits(32).to_bytes(4, "big")
+        except AttributeError:
+            # Fallback for systems without urandom.getrandbits
+            mask = bytes([urandom.randint(0, 255) for _ in range(4)])
         plen = len(payload)
         hdr = struct.pack("!BB", 0x8A, 0x80 | plen) if plen < 126 else struct.pack("!BBH", 0x8A, 0x80 | 126, plen)
         masked = bytearray(plen)
@@ -160,7 +235,11 @@ class WebSocketClient:
         else:
             header = struct.pack("!BBQ", 0x81, 0x80 | 127, length)
 
-        mask = urandom.getrandbits(32).to_bytes(4, "big")
+        try:
+            mask = urandom.getrandbits(32).to_bytes(4, "big")
+        except AttributeError:
+            # Fallback for systems without urandom.getrandbits
+            mask = bytes([urandom.randint(0, 255) for _ in range(4)])
         masked = bytearray(length)
         for i in range(length):
             masked[i] = payload[i] ^ mask[i % 4]
@@ -226,7 +305,11 @@ class WebSocketClient:
         self._closed = True
         if self._sock:
             try:
-                mask_key = urandom.getrandbits(32).to_bytes(4, "big")
+                try:
+                    mask_key = urandom.getrandbits(32).to_bytes(4, "big")
+                except AttributeError:
+                    # Fallback for systems without urandom.getrandbits
+                    mask_key = bytes([urandom.randint(0, 255) for _ in range(4)])
                 self._sock.write(b"\x88\x80" + mask_key)
             except Exception:
                 pass

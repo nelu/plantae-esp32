@@ -8,7 +8,7 @@
     "sync_every_s": 21600
   },
   "wamp": {
-    "url": "ws://192.168.4.106/ws",
+    "url": "wss://plantae.robits.org/ws",
     "realm": "realm1",
     "prefix": "org.robits.plantae.",
     "legacy_by_ip": true,
@@ -74,7 +74,6 @@
     "date_format": "%H:%M:%S",
     "loggers": {
       "root": "DEBUG",
-      "wamp_debug": "INFO",
       "wamp": "DEBUG",
       "wamp_bridge": "DEBUG",
       "ntp": "DEBUG"
