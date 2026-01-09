@@ -81,10 +81,20 @@ class Supervisor:
         self._reboot_at = None
         self.wamp = None
 
+    async def _announce_reboot(self):
+        if self.wamp:
+            try:
+                await self.wamp.publish_announce("announce.offline")
+            except Exception as e:
+                LOG.error("Failed to announce offline: %s", e)
+
     def schedule_reboot(self, t_s=1):
         if t_s < 1: t_s = 1
+        LOG.info("Reboot scheduled in %ds", t_s)
         self._reboot_at = time.ticks_add(time.ticks_ms(), int(t_s * 1000))
-        LOG.info("schedule_reboot: %s" % self._reboot_at)
+        
+        # Trigger offline announcement in background
+        asyncio.create_task(self._announce_reboot())
 
     def _maybe_reboot(self):
         if self._reboot_at and time.ticks_diff(time.ticks_ms(), self._reboot_at) >= 0:

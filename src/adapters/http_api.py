@@ -39,9 +39,9 @@ class HttpApi:
                 self.patch_cfg(patch)
                 await self._json(writer, {"ok": True})
             elif method == "POST" and path == "/reboot":
+                self.schedule_reboot(1)
                 await self._json(writer, {"ok": True})
                 await writer.aclose()
-                self.schedule_reboot(1)
                 return
             elif method == "POST" and path == "/pump":
                 # Control pump PWM: POST /pump {"duty": 0.5, "duration_s": 10}

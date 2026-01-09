@@ -16,7 +16,6 @@ class WampBridge:
         self.schedule_reboot = schedule_reboot
         self.dosing_controller = dosing_controller
         self.client = None
-        self._graceful_close = False  # Set True on reboot to send announce.offline
 
     def _pfx(self):
         return self.cfg["wamp"].get("prefix", "org.robits.plantae.")
@@ -131,12 +130,6 @@ class WampBridge:
         import uasyncio as asyncio
 
         if self.client:
-            # Only send announce.offline on graceful shutdown (e.g. reboot)
-            if self._graceful_close:
-                try:
-                    await self.publish_announce("announce.offline")
-                except Exception:
-                    pass
             try:
                 await self.client.close()
             except Exception:
@@ -144,7 +137,6 @@ class WampBridge:
 
         self.client = None
         self.state.wamp_ok = False
-        self._graceful_close = False
 
         # give uasyncio a chance to run socket close callbacks
         await asyncio.sleep_ms(200)
@@ -268,13 +260,6 @@ class WampBridge:
         if "timeout" in kwargs:
             try: t = int(kwargs["timeout"])
             except Exception: pass
-        
-        # Send announce.offline before reboot
-        self._graceful_close = True
-        try:
-            await self.publish_announce("announce.offline")
-        except Exception:
-            pass
         
         self.schedule_reboot(t)
         return True
