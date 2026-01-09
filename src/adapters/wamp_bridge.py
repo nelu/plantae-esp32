@@ -58,7 +58,6 @@ class WampBridge:
 
     async def connect(self):
         import gc
-        from lib.memory_optimizer import MemoryOptimizer
         
         url = self.cfg["wamp"]["url"]
         realm = self.cfg["wamp"].get("realm", "realm1")
@@ -67,19 +66,19 @@ class WampBridge:
         self.client = None
         self.state.wamp_ok = False
 
-        # Check memory before attempting connection
-        mem_info = MemoryOptimizer.get_memory_info()
-        if mem_info:
-            LOG.info("CONN: url=%s realm=%s mem_free=%s", url, realm, mem_info.get('free', 'unknown'))
-        else:
-            LOG.info("CONN: url=%s realm=%s", url, realm)
+        # Simple debug logging
+        LOG.info("CONN: url=%s realm=%s", url, realm)
 
-        # Use memory optimizer for connection preparation
-        await MemoryOptimizer.prepare_for_ssl()
+        # Basic gc before connection
+        gc.collect()
 
         # Parse ws:// / wss:// URL without urllib (reuse helper from ws_async)
         scheme, host, port, path = parse_ws_url(url)
         use_ssl = (scheme == "wss")
+        
+        # Check if we have a pre-resolved host for SNI (Disabled for standard DNS test)
+        # server_hostname = self.cfg["wamp"].get("original_host")
+        server_hostname = None
 
         # AutobahnWS handles both WebSocket and WAMP session handshake
         # Pass keepalive config for resilience over public internet
@@ -91,6 +90,7 @@ class WampBridge:
             use_ssl=use_ssl,
             ping_interval_s=ka.get("ping_interval_s"),
             idle_timeout_s=ka.get("idle_timeout_s"),
+            server_hostname=server_hostname,
         )
 
         # Set up the on_join callback to handle subscriptions/registrations

@@ -54,7 +54,7 @@
     "tz_offset_min": 120,
     "pwm": [
       {
-        "start": "07:00",
+        "start": "20:00",
         "end": "20:10",
         "duty": 0.5,
         "interval": 100,
@@ -62,8 +62,8 @@
       }
     ],
     "dosing": {
-      "start": "08:00",
-      "end": "20:10",
+      "start": "17:00",
+      "end": "17:10",
       "output": "pwm",
       "quantity": 0.25
     }
@@ -71,12 +71,10 @@
   "logging": {
     "level": "DEBUG",
     "format": "%(asctime)s %(levelname)s:%(name)s:%(message)s",
-    "date_format": "%H:%M:%S",
     "loggers": {
       "root": "DEBUG",
-      "wamp": "DEBUG",
-      "wamp_bridge": "DEBUG",
-      "ntp": "DEBUG"
+      "ws": "DEBUG",
+      "adapters.wamp_bridge": "DEBUG"
     }
   }
 }
