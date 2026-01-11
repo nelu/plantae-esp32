@@ -8,7 +8,7 @@ DEFAULT = {
   "ntp": {"host": "pool.ntp.org", "sync_every_s": 21600},
   "time": {"last_mpy_s": 0},
   "wamp": {"url": "ws://10.0.0.1:8080/ws", "realm": "realm1", "prefix": "org.robits.plantae.", "legacy_by_ip": True, "keepalive": {"ping_interval_s": 20, "idle_timeout_s": 60}},
-  "flow": {"type": "YFS401", "pin": 14, "calibration": 0, "read_interval_ms": 1000, "pullup_external": True},
+  "flow": {"type": "YFS401", "pin": 14, "calibration": 5880, "read_interval_ms": 1000, "pullup_external": True},
   "outputs": {
     "pwm": {"pin": 25, "freq": 20000, "active_low": False},
     "pca9685": {"enabled": True, "i2c_id": 0, "scl": 22, "sda": 21, "addr": 64, "freq": 400000, "channels": 16, "pwm_freq": 1000}

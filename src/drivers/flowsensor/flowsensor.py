@@ -3,7 +3,7 @@ import time
 
 # sensor pulses per liter
 flowtypes = {
-"YFS401": 5880,
+"YFS401": 1,
 "YFS201": 450
 }
 

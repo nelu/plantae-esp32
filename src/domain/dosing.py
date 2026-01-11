@@ -1,16 +1,8 @@
 import time
-try:
-    import uasyncio as asyncio
-except ImportError:
-    import asyncio
-try:
-    from lib.logging import getLogger
-    LOG = getLogger("dosing")
-except ImportError:
-    # Fallback for testing
-    import logging
-    LOG = logging.getLogger("dosing")
-    logging.basicConfig(level=logging.INFO)
+
+from lib.logging import getLogger
+LOG = getLogger("dosing")
+
 
 class DosingController:
     def __init__(self, flow_sensor, output_controller, config):
@@ -40,7 +32,7 @@ class DosingController:
         
         return start_min <= local_minutes < end_min
     
-    async def start_dose(self, quantity_l):
+    async def start_dose(self, quantity_l, is_manual=False):
         """Start dosing a specific quantity in liters"""
         if self.is_dosing:
             LOG.warning("Dosing already in progress")
@@ -54,6 +46,7 @@ class DosingController:
             return False
             
         self.is_dosing = True
+        self._is_manual_dose = is_manual
         self.dose_start_volume = self.flow_sensor.volume_l
         self.target_quantity = float(quantity_l)
         self.dose_start_time = time.time()
@@ -61,8 +54,9 @@ class DosingController:
         # Start the output at full duty
         self.output_controller.set(1.0)
         
-        LOG.info("Started dosing %.3f L (start_volume=%.3f L)", 
-                 self.target_quantity, self.dose_start_volume)
+        LOG.info("Started dosing %.3f L (start_volume=%.3f L) %s", 
+                 self.target_quantity, self.dose_start_volume, 
+                 "(manual)" if is_manual else "(auto)")
         return True
     
     def stop_dose(self):
@@ -127,7 +121,7 @@ class DosingController:
             return
             
         # Check if we're outside dosing window (safety)
-        if not self._is_dosing_time(local_minutes):
+        if not self._is_manual_dose and not self._is_dosing_time(local_minutes):
             LOG.warning("Stopping dosing - outside time window")
             self.stop_dose()
             return

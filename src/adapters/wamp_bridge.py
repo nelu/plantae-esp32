@@ -8,14 +8,12 @@ from version import VERSION, BUILD_DATE
 LOG = getLogger(__name__)
 
 class WampBridge:
-    def __init__(self, cfg, state, switchbank, config_mgr, schedule_reboot, dosing_controller=None):
+    def __init__(self, cfg, state, service):
         self.cfg = cfg
         self.state = state
-        self.switchbank = switchbank
-        self.config_mgr = config_mgr
-        self.schedule_reboot = schedule_reboot
-        self.dosing_controller = dosing_controller
+        self.service = service
         self.client = None
+        self._last_alive_state = False
 
     def _pfx(self):
         return self.cfg["wamp"].get("prefix", "org.robits.plantae.")
@@ -25,8 +23,8 @@ class WampBridge:
 
     def _addr_suffixes(self):
         out = [self.state.device_id]
-        if self.cfg["wamp"].get("legacy_by_ip", True):
-            out.append(self.state.ip)
+        # if self.cfg["wamp"].get("legacy_by_ip", True):
+        #     out.append(self.state.ip)
         seen=set(); uniq=[]
         for x in out:
             if x and x not in seen:
@@ -40,17 +38,17 @@ class WampBridge:
         """
         Connectivity check for the current WAMP client (AutobahnWS).
         """
-        c = self.client
-        if not c:
+        if not self.client:
+            LOG.warning("not available self.client: %s", self.client)
             return False
-        is_connected = getattr(c, "is_connected", None)
-        connected = bool(is_connected()) if callable(is_connected) else False
+
+        connected = bool(self.client.is_connected())
         
         # Add debug logging when connection state changes
-        if hasattr(self, '_last_alive_state'):
-            if self._last_alive_state != connected:
-                LOG.warn("connection state changed: %s -> %s", self._last_alive_state, connected)
-                pass
+        if self._last_alive_state != connected:
+            LOG.info("connection state changed: %s -> %s", self._last_alive_state, connected)
+            pass
+
         self._last_alive_state = connected
         
         return connected
@@ -65,8 +63,7 @@ class WampBridge:
         self.client = None
         self.state.wamp_ok = False
 
-        # Simple debug logging
-        LOG.info("CONN: url=%s realm=%s", url, realm)
+
 
         # Basic gc before connection
         gc.collect()
@@ -94,7 +91,10 @@ class WampBridge:
 
         # Set up the on_join callback to handle subscriptions/registrations
         self.client.on_join(self._on_wamp_join)
-        
+
+        # Simple debug logging
+        LOG.info("CONN: url=%s realm=%s", url, realm)
+
         await self.client.connect()
         await asyncio.sleep_ms(100)
 
@@ -108,6 +108,7 @@ class WampBridge:
         await self.client.register(self._topic("control"), self.rpc_control)
         await self.client.register(self._topic("calibrate"), self.rpc_calibrate)
         await self.client.register(self._topic("dose"), self.rpc_dose)
+        await self.client.register(self._topic("output"), self.rpc_output)
         await self.client.register(self._topic("status"), self.rpc_status)
 
         await self.client.register(self._topic("restart"), self.rpc_reboot)
@@ -115,11 +116,13 @@ class WampBridge:
         for suf in self._addr_suffixes():
             await self.client.register(self._addr_topic("calibrate", suf), self.rpc_calibrate)
             await self.client.register(self._addr_topic("dose", suf), self.rpc_dose)
+            await self.client.register(self._addr_topic("output", suf), self.rpc_output)
             await self.client.register(self._addr_topic("status", suf), self.rpc_status)
-            # await self.client.register(self._addr_topic("reboot", suf), self.rpc_reboot)
+            # await self.client.register(self._addr_topic("restart", suf), self.rpc_reboot)
             await self.client.register(self._addr_topic("reset", suf), self.rpc_reset)
 
         await self.client.subscribe(self._topic("announce.master"), self.on_master)
+        LOG.info("before announce.online")
 
         await self.publish_announce("announce.online")
         
@@ -142,29 +145,28 @@ class WampBridge:
         await asyncio.sleep_ms(200)
         gc.collect()
 
-    async def publish_announce(self, topic_name, exclude_me=None):
-        # LOG.debug("publish_announce: %s", topic_name)
+    async def publish_announce(self, topic_name, exclude_me=True):
 
-        c = self.client
-        if not c:
-            return
+        LOG.debug("publish_announce: %s", topic_name)
+
         # require a joined session
-        is_connected = getattr(c, "is_connected", None)
-        if callable(is_connected):
-            if not is_connected():
-                return
+        if not self.client.is_connected():
+            LOG.warning("publish_announce: is_connected false  %s" % topic_name)
+            return
 
         payload = {"id": self.state.device_id, "ip": self.state.ip,
                    "ver": VERSION,
                    "build": BUILD_DATE,
-                   "ts": time.time()}
+                   "ts": time.time(),
+                   "config": self.cfg
+                   }
         
         options = {}
         if exclude_me is not None:
              options["exclude_me"] = exclude_me
 
-        pub_id = await c.publish(self._topic(topic_name), kwargs=payload, acknowledge=True, options=options)
-        # LOG.debug("Announce published: %s pub_id=%s", topic_name, pub_id)
+        pub_id = await self.client.publish(self._topic(topic_name), kwargs=payload, acknowledge=False, options=options)
+        LOG.debug("Announce published: %s pub_id=%s", topic_name, pub_id)
 
     async def publish_switch(self, idx, on):
         if not self.client: return
@@ -186,37 +188,26 @@ class WampBridge:
         await self.publish_announce("announce.online")
 
     async def rpc_control(self, args, kwargs, details):
-        if "all" in kwargs and self.switchbank:
-            ok = self.switchbank.set_all(bool(kwargs["all"]))
-            self.state.switches[:] = self.switchbank.values[:]
-            return ok
-        if "switch" in kwargs and self.switchbank:
+        if "all" in kwargs:
+            return self.service.set_all_switches(bool(kwargs["all"]))
+        if "switch" in kwargs:
             idx, on = int(kwargs["switch"][0]), bool(kwargs["switch"][1])
-            ok = self.switchbank.set(idx, on)
+            ok = self.service.set_switch(idx, on)
             if ok:
-                self.state.switches[:] = self.switchbank.values[:]
                 await self.publish_switch(idx, on)
             return ok
         if "patch_cfg" in kwargs and isinstance(kwargs["patch_cfg"], dict):
-            self.config_mgr.update(kwargs["patch_cfg"])
-            self.config_mgr.save()
-            return True
+            return self.service.patch_config(kwargs["patch_cfg"])
         return False
 
     async def rpc_calibrate(self, args, kwargs, details):
         if kwargs.get("type") == "flow" and "calibration" in kwargs:
             cal = int(kwargs["calibration"])
-            self.cfg["flow"]["calibration"] = cal
-            self.config_mgr.update({"flow": {"calibration": cal}})
-            self.config_mgr.save()
-            return True
+            return self.service.patch_config({"flow": {"calibration": cal}})
         return False
 
     async def rpc_dose(self, args, kwargs, details):
         """Handle dosing RPC calls"""
-        if not self.dosing_controller:
-            return {"error": "dosing_not_available"}
-            
         action = kwargs.get("action", "status")
         
         if action == "start":
@@ -224,33 +215,49 @@ class WampBridge:
             if quantity <= 0:
                 return {"error": "invalid_quantity", "quantity": quantity}
             
-            success = await self.dosing_controller.start_dose(quantity)
+            success = await self.service.start_dose(quantity, is_manual=True)
             if success:
                 return {"status": "started", "quantity": quantity}
             else:
                 return {"error": "failed_to_start"}
                 
         elif action == "stop":
-            success = self.dosing_controller.stop_dose()
+            success = self.service.stop_dose()
             return {"status": "stopped" if success else "not_active"}
             
         elif action == "status":
-            return self.dosing_controller.get_dose_status()
+            return self.service.get_dose_status()
             
         else:
             return {"error": "unknown_action", "action": action}
 
+    async def rpc_output(self, args, kwargs, details):
+        """Handle output control RPC calls"""
+        name = kwargs.get("name", "pwm")
+        duty = kwargs.get("duty", 1.0)
+        action = kwargs.get("action")
+        
+        if name == "pwm":
+            if action == "release":
+                self.service.set_pwm_manual(0, override=False, source="rpc")
+                return {"status": "released"}
+            else:
+                self.service.set_pwm_manual(duty, override=True, source="rpc")
+                return {"status": "set", "duty": duty}
+            
+        elif name == "pca9685":
+            return {"status": "pca9685_not_implemented"}
+            
+        else:
+            return {"error": "unknown_output", "name": name}
+
 
     async def rpc_status(self, args, kwargs, details):
         """Get device status including dosing information"""
-        return self.state.snapshot()
+        return self.service.get_status()
 
     async def rpc_reset(self, args, kwargs, details):
-        # if kwargs.get("flow") or kwargs.get("interval") == "flow":
-            self.state.volume_l = 0.0
-            self.state.pulses = 0
-            return True
-        # return False
+        return self.service.reset_counters()
 
     async def rpc_reboot(self, args, kwargs, details):
         t = 1
@@ -261,5 +268,4 @@ class WampBridge:
             try: t = int(kwargs["timeout"])
             except Exception: pass
         
-        self.schedule_reboot(t)
-        return True
+        return self.service.reboot(t)

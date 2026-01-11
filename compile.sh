@@ -5,7 +5,7 @@ MPY_CROSS="mpy-cross"
 SRC_DIR="src"
 DIST_DIR="dist"
 
-echo "Building Production Image in $DIST_DIR..."
+echo "$(date '+%Y-%m-%d %H:%M:%S') Building Production Image in $DIST_DIR..."
 
 # 1. Clean/Create Dist
 rm -rf "$DIST_DIR"
@@ -16,7 +16,7 @@ ASSETS=("main.py" "boot.py" "config.json" "version.py")
 for asset in "${ASSETS[@]}"; do
     if [ -f "$SRC_DIR/$asset" ]; then
         cp "$SRC_DIR/$asset" "$DIST_DIR/$asset"
-        echo "Copied $asset"
+        echo "$(date '+%Y-%m-%d %H:%M:%S') Copied $asset"
     fi
 done
 
@@ -41,6 +41,7 @@ FILES=(
     "domain/dosing.py"
     "domain/scheduler.py"
     "domain/controllers.py"
+    "domain/device_service.py"
     
     "drivers/pca9685.py"
     "drivers/pwm_out.py"
@@ -63,16 +64,16 @@ for rel_file in "${FILES[@]}"; do
         filename=$(basename "$rel_file" .py)
         out_path="$DIST_DIR/$rel_dir/$filename.mpy"
         
-        echo "Compiling $rel_file -> $out_path"
+        echo "$(date '+%Y-%m-%d %H:%M:%S') Compiling $rel_file -> $out_path"
         $MPY_CROSS "$src_path" -o "$out_path"
         
         if [ $? -ne 0 ]; then
-            echo "  [FAIL]"
+            echo "$(date '+%Y-%m-%d %H:%M:%S')  [FAIL]"
             exit 1
         fi
     else
-        echo "Skipping missing: $src_path"
+        echo "$(date '+%Y-%m-%d %H:%M:%S') Skipping missing: $src_path"
     fi
 done
 
-echo "Build Complete. Directory: $DIST_DIR"
+echo "$(date '+%Y-%m-%d %H:%M:%S') Build Complete. Directory: $DIST_DIR"

@@ -2,60 +2,82 @@ import uasyncio as asyncio
 import time
 from machine import I2C, Pin, reset
 
-from adapters.config_manager import ConfigManager
-from adapters.wifi import Wifi
-from adapters.ntp import sync as ntp_sync
-# from adapters.wamp_bridge import WampBridge
-
-from domain.state import DeviceState
-
-from app.device_id import get_device_id
+from lib.logging import Logger
 
 def configure_logging(cfg):
-    """Configure logging from config file"""
-    from lib.logging import basicConfig, DEBUG, INFO, WARNING, ERROR, CRITICAL, getLogger
-    
-    # Map string levels to constants
+    """Configure logging from config dict (console only)."""
+    from lib.logging import (
+        basicConfig, getLogger, Formatter,
+        DEBUG, INFO, WARNING, ERROR, CRITICAL
+    )
+
+    def format_time(self, datefmt, record):
+        # Use strftime if present
+        if hasattr(time, "strftime"):
+            return time.strftime(datefmt, time.localtime(record.ct))
+
+        # Simple fallback for common patterns like "%H:%M:%S"
+        t = time.localtime(record.ct)  # (Y, m, d, H, M, S, ...)
+        Y, m, d, H, M, S = t[0], t[1], t[2], t[3], t[4], t[5]
+        s = datefmt or "%Y-%m-%d %H:%M:%S"
+        return (s.replace("%Y", f"{Y:04d}")
+                .replace("%m", f"{m:02d}")
+                .replace("%d", f"{d:02d}")
+                .replace("%H", f"{H:02d}")
+                .replace("%M", f"{M:02d}")
+                .replace("%S", f"{S:02d}"))
+
+    Formatter.formatTime = format_time
+    log_cfg = cfg.get("logging")
+
+    if not log_cfg:
+        print("Using default logging")
+        return getLogger()
+
     level_map = {
         "DEBUG": DEBUG,
-        "INFO": INFO, 
+        "INFO": INFO,
         "WARNING": WARNING,
         "ERROR": ERROR,
-        "CRITICAL": CRITICAL
+        "CRITICAL": CRITICAL,
     }
-    
-    # Get logging config with defaults
-    log_cfg = cfg.get("logging", {})
-    default_level = level_map.get(log_cfg.get("level", "WARNING"), WARNING)
-    
-    # Configure basic logging with timestamp format
-    log_format = log_cfg.get("format", "%(asctime)s %(levelname)s:%(name)s:%(message)s")
-    date_format = log_cfg.get("date_format", "%H:%M:%S")
-    basicConfig(level=default_level, format=log_format, datefmt=date_format)
-    
-    # Set timezone offset for logging timestamps
-    tz_offset_min = cfg.get("schedule", {}).get("tz_offset_min", 0)
-    import lib.logging as logging_module
-    logging_module._tz_offset_s = tz_offset_min * 60
-    
-    # Configure individual loggers
-    loggers_cfg = log_cfg.get("loggers", {})
-    for logger_name, level_str in loggers_cfg.items():
-        level = level_map.get(level_str, default_level)
-        if logger_name == "root":
-            logger = getLogger()
-        else:
-            logger = getLogger(logger_name)
-        logger.setLevel(level)
-    
-    LOG = getLogger()
-    LOG.info("Logging configured from config file")
-    return LOG
 
-LOG = None  # Will be set after config is loaded
+    # Base/root level (also used for handler threshold)
+    base_level = level_map.get(log_cfg.get("level", "WARNING"), WARNING)
+
+    # Formatting: you control it via config; you can switch to the "official" style string there.
+    log_format = log_cfg.get("format", "%(asctime)s %(levelname)s:%(name)s:%(message)s")
+    datefmt = log_cfg.get("datefmt", "%H:%M:%S")
+
+    # basicConfig sets up root logger + one StreamHandler + Formatter
+    # force=True prevents duplicated handlers if this runs multiple times
+    basicConfig(level=base_level, format=log_format, datefmt=datefmt, force=True)
+
+    root = getLogger()
+
+    # Per-logger overrides
+    for logger_name, level_str in (log_cfg.get("loggers") or {}).items():
+        lvl = level_map.get(level_str, base_level)
+
+        if logger_name == "root":
+            root.setLevel(lvl)
+            for h in root.handlers:
+                h.setLevel(lvl)
+        else:
+            getLogger(logger_name).setLevel(lvl)
+
+    root.info("Logging configured from config file")
+    return root
+
+LOG: Logger | None = None
 
 class Supervisor:
     def __init__(self, config_path="config.json"):
+        from adapters.wifi import Wifi
+        from domain.state import DeviceState
+        from app.device_id import get_device_id
+        from adapters.config_manager import ConfigManager
+
         import gc
         gc.collect()
         
@@ -73,13 +95,21 @@ class Supervisor:
         self.state = DeviceState(self.device_id)
         
         self.wifi = Wifi()
-        self.pwm = None
         self.switchbank = None
         self.flow = None
         self.dosing_controller = None
 
         self._reboot_at = None
         self.wamp = None
+
+        
+        # Initialize centralized device service (empty initially)
+        from domain.device_service import DeviceService
+        self.service = DeviceService(
+            self.state, 
+            self.cfg_mgr, 
+            self.schedule_reboot
+        )
 
     async def _announce_reboot(self):
         if self.wamp:
@@ -113,6 +143,8 @@ class Supervisor:
         lt = time.localtime(t)
         return (lt[3]*60 + lt[4], lt[5])
 
+
+
     def _init_hw(self):
         from drivers.pca9685 import PCA9685
 
@@ -122,7 +154,6 @@ class Supervisor:
         from domain.controllers import SwitchBank
 
         pwm_cfg = self.cfg["outputs"]["pwm"]
-        self.pwm = PwmOut(pwm_cfg["pin"], pwm_cfg.get("freq",20000), pwm_cfg.get("active_low",False))
 
         pca_cfg = self.cfg["outputs"]["pca9685"]
         if pca_cfg.get("enabled", True):
@@ -138,10 +169,16 @@ class Supervisor:
         ppl = getattr(flowtypes, fcfg.get("type","YFS401"), flowtypes.YFS401)
         self.flow = FlowSensor(ppl, fcfg.get("pin",14))
         self.flow.begin(pullup=bool(fcfg.get("pullup_external", True)))
-        
+        self.service.pwm = PwmOut(pwm_cfg["pin"], pwm_cfg.get("freq",20000), pwm_cfg.get("active_low",False))
+
         # Initialize dosing controller
         from domain.dosing import DosingController
-        self.dosing_controller = DosingController(self.flow, self.pwm, self.cfg)
+        self.dosing_controller = DosingController(self.flow, self.service.pwm, self.cfg)
+        
+        # Update service with initialized components
+        self.service.flow = self.flow
+        self.service.dosing = self.dosing_controller
+        self.service.switches = self.switchbank
 
     async def task_wifi(self):
         """Monitor WiFi connection and reconnect if dropped."""
@@ -162,6 +199,8 @@ class Supervisor:
             await asyncio.sleep(5) 
 
     async def task_ntp(self):
+        from adapters.ntp import sync as ntp_sync
+
         every = int(self.cfg.get("ntp", {}).get("sync_every_s", 21600))
         host = self.cfg.get("ntp", {}).get("host", "pool.ntp.org")
         initial_sync = True
@@ -202,60 +241,49 @@ class Supervisor:
         from domain.scheduler import duty_from_schedule
 
         while True:
-            # Skip schedule if button override is active or dosing is active
-            if not getattr(self, '_pwm_btn_override', False) and not (self.dosing_controller and self.dosing_controller.is_dosing):
+            # Skip schedule if override is active or dosing is active
+            if not self.service.pwm_override and not (self.dosing_controller and self.dosing_controller.is_dosing):
                 sched = self.cfg.get("schedule", {}).get("pwm", [])
-                mins, secs = self._local_time()
-                duty = duty_from_schedule(sched, mins, secs)
-                self.pwm.set(duty)
-                self.state.pwm_duty = duty
+                # config disabled
+                if sched:
+                    mins, secs = self._local_time()
+                    duty = duty_from_schedule(sched, mins, secs)
+                    self.service.pwm.set(duty)
+                    self.state.pwm_duty = duty
             await asyncio.sleep(1)
 
     async def task_pwm_test_btn(self):
         btn_cfg = self.cfg.get("inputs", {}).get("pwm_test_btn", {})
         pin_num = btn_cfg.get("pin")
         if not pin_num:
-            LOG.error("PWM test button ping not set")
+            LOG.error("PWM test button pin not set")
             return  # No button configured
 
         active_low = btn_cfg.get("active_low", True)
         test_duty = btn_cfg.get("test_duty", 1.0)
 
         btn = Pin(pin_num, Pin.IN)
-        self._pwm_btn_override = False
-        last_state = btn.value()
+        button_override_active = False
 
         while True:
             state = btn.value()
             pressed = (state == 0) if active_low else (state == 1)
 
-            if pressed and not self._pwm_btn_override:
+            if pressed and not button_override_active:
                 # Button just pressed - activate test mode
-                self._pwm_btn_override = True
-                self.pwm.set(test_duty)
-                self.state.pwm_duty = test_duty
-                # if LOG:
-                #     LOG.debug("PWM test button pressed: duty=%.2f", test_duty)
-            elif not pressed and self._pwm_btn_override:
+                button_override_active = True
+                self.service.set_pwm_manual(test_duty, True, source="button")
+            elif not pressed and button_override_active:
                 # Button released - return to schedule
-                self._pwm_btn_override = False
-                # if LOG:
-                #     LOG.debug("PWM test button released")
+                button_override_active = False
+                self.service.set_pwm_manual(0, False, source="button")
 
-            last_state = state
             await asyncio.sleep_ms(50)
 
     async def task_http(self):
         from adapters.http_api import HttpApi
 
-        api = HttpApi(
-            get_status=self.state.snapshot,
-            get_cfg=lambda: self.cfg,
-            patch_cfg=self._patch_cfg,
-            schedule_reboot=self.schedule_reboot,
-            pwm_out=self.pwm,
-            flow_sensor=self.flow,
-        )
+        api = HttpApi(self.service)
         await api.serve(port=80)
         while True:
             await asyncio.sleep(3600)
@@ -296,7 +324,7 @@ class Supervisor:
                 if LOG: LOG.info("WAMP attempt. Free: %d", gc.mem_free())
                 
                 from adapters.wamp_bridge import WampBridge
-                self.wamp = WampBridge(self.cfg, self.state, self.switchbank, self.cfg_mgr, self.schedule_reboot, self.dosing_controller)
+                self.wamp = WampBridge(self.cfg, self.state, self.service)
                 if LOG: LOG.info("task_wamp: connecting...")
 
                 import gc
@@ -413,10 +441,6 @@ class Supervisor:
             # Only after WAMP is connected, start other memory-intensive tasks
             self._init_hw()
             
-            # Inject the now-initialized controller into the active WAMP bridge
-            if self.wamp:
-                self.wamp.dosing_controller = self.dosing_controller
-
             asyncio.create_task(self.task_http())
             asyncio.create_task(self.task_flow())
             asyncio.create_task(self.task_pwm_schedule())
