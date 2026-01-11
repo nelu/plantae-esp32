@@ -321,11 +321,11 @@ class Supervisor:
             try:
                 import gc
                 gc.collect()
-                if LOG: LOG.info("WAMP attempt. Free: %d", gc.mem_free())
+                LOG.info("WAMP attempt. Free: %d", gc.mem_free())
                 
                 from adapters.wamp_bridge import WampBridge
                 self.wamp = WampBridge(self.cfg, self.state, self.service)
-                if LOG: LOG.info("task_wamp: connecting...")
+                LOG.info("task_wamp: connecting...")
 
                 import gc
                 gc.collect()
@@ -384,7 +384,10 @@ class Supervisor:
                 except Exception:
                     pass
 
-                if eno == 16:
+                msg = str(e)
+                if "send timeout" in msg:
+                    await asyncio.sleep(5)
+                elif eno == 16:
                     await asyncio.sleep(2)
                 else:
                     await asyncio.sleep(backoff)
@@ -460,16 +463,13 @@ class Supervisor:
                     import gc
                     gc.collect()  # Force garbage collection
                     free_mem = gc.mem_free()
-                    if LOG:
-                        LOG.info("Memory check: %d bytes free" % free_mem)
+                    LOG.info("Memory check: %d bytes free" % free_mem)
                     if free_mem < 10000:  # Less than 10KB free
-                        if LOG:
-                            LOG.error("Low memory warning: %d bytes" % free_mem)
+                        LOG.error("Low memory warning: %d bytes" % free_mem)
                 
                 await asyncio.sleep(0.25)
         except Exception as e:
-            if LOG:
-                LOG.error("Critical error in supervisor: %s" % e)
+            LOG.error("Critical error in supervisor: %s" % e)
             print("CRITICAL ERROR:", e)
             # Don't let the system crash silently
             import sys

@@ -26,6 +26,8 @@ class WebSocketClient:
         self._closed = False
         self._last_activity_ms = None
         self._rxbuf = b""
+        self._tx_lock = asyncio.Lock()
+
 
     def _defrag_heap(self):
         try:
@@ -130,36 +132,62 @@ class WebSocketClient:
         try:
             mask_key = urandom.getrandbits(32).to_bytes(4, "big")
             header = struct.pack("!BB", 0x89, 0x80)
-            await self._sock_send(header + mask_key)
+            async with self._tx_lock:     # <-- ADD
+                await self._sock_send(header + mask_key)
             self._last_activity_ms = time.ticks_ms()
         except Exception:
             self._closed = True
             raise
 
-    async def _sock_send(self, data):
+    async def _sock_send(self, data, timeout_ms=30000, max_chunk=None):
         if not self._sock:
             raise OSError("Socket not connected")
+
+        if max_chunk is None:
+            max_chunk = 1024 if self.use_ssl else 1460
+
         mv = memoryview(data)
         total, sent = len(data), 0
         t0 = time.ticks_ms()
+
         while sent < total:
+            if time.ticks_diff(time.ticks_ms(), t0) > timeout_ms:
+                self._force_close()
+                raise OSError("Socket send timeout")
+
             try:
-                n = self._sock.write(mv[sent:])
-                sent += n if n else 0
-            except OSError as e:
-                if e.args[0] in (11, -11):
+                end = sent + max_chunk
+                n = self._sock.write(mv[sent:end])
+
+                # Treat 0 differently for non-SSL (usually means closed)
+                if n == 0 and not self.use_ssl:
+                    self._force_close()
+                    raise OSError("Socket closed during send")
+
+                if not n:
                     await asyncio.sleep_ms(5)
-                    if time.ticks_diff(time.ticks_ms(), t0) > 30000:
-                        raise OSError("Socket send timeout")
                     continue
+
+                sent += n
+
+            except OSError as e:
+                errno = e.args[0] if e.args else None
+                if errno in (11, -11):
+                    await asyncio.sleep_ms(5)
+                    continue
+
+                # Connection errors: close hard so reconnect is clean
+                self._force_close()
                 raise
+
             if sent < total:
                 await asyncio.sleep_ms(1)
+
 
     async def _sock_recv(self, n, timeout_ms=30000):
         if not self._sock:
             raise OSError("Socket not connected")
-            
+
         if len(self._rxbuf) >= n:
             result, self._rxbuf = self._rxbuf[:n], self._rxbuf[n:]
             return result
@@ -171,29 +199,49 @@ class WebSocketClient:
         while len(buf) < n:
             if not self._sock:
                 raise OSError("Socket closed during recv")
+
             try:
                 chunk = self._sock.read(n - len(buf))
-                if chunk:
+                if chunk is None:
+                    pass
+                elif chunk == b"":
+                    # peer closed
+                    self._force_close()
+                    raise OSError("Socket closed by peer")
+                else:
                     buf.extend(chunk)
+
             except OSError as e:
-                if e.args[0] not in (11, -11):
+                if e.args and e.args[0] not in (11, -11):
+                    self._force_close()
                     raise
 
             if len(buf) < n:
                 if time.ticks_diff(time.ticks_ms(), t0) > timeout_ms:
+                    self._force_close()
                     raise OSError("Socket recv timeout")
                 await asyncio.sleep_ms(10)
 
         return bytes(buf)
 
-    async def _send_pong(self, payload):
+    def _force_close(self):
+        self._closed = True
+        try:
+            if self._sock:
+                self._sock.close()
+        except Exception:
+            pass
+        self._sock = None
+
+    async def send_pong(self, payload):
         mask = urandom.getrandbits(32).to_bytes(4, "big")
         plen = len(payload)
         hdr = struct.pack("!BB", 0x8A, 0x80 | plen) if plen < 126 else struct.pack("!BBH", 0x8A, 0x80 | 126, plen)
         masked = bytearray(plen)
         for i in range(plen):
             masked[i] = payload[i] ^ mask[i % 4]
-        await self._sock_send(hdr + mask + bytes(masked))
+        async with self._tx_lock:         # <-- ADD
+            await self._sock_send(hdr + mask + bytes(masked))
 
     async def send_text(self, data):
         payload = data.encode() if isinstance(data, str) else data
@@ -211,7 +259,9 @@ class WebSocketClient:
         for i in range(length):
             masked[i] = payload[i] ^ mask[i % 4]
 
-        await self._sock_send(header + mask + bytes(masked))
+        async with self._tx_lock:         # <-- ADD (covers the whole frame)
+            await self._sock_send(header + mask + bytes(masked))
+
         self._last_activity_ms = time.ticks_ms()
 
     async def recv_text(self):
@@ -257,7 +307,7 @@ class WebSocketClient:
                 self._closed = True
                 raise OSError("WebSocket closed by peer")
             if opcode == 0x9:  # ping -> pong, continue loop
-                await self._send_pong(payload)
+                await self.send_pong(payload)
                 continue
             if opcode == 0xA:  # pong -> ignore, continue loop
                 continue
@@ -273,7 +323,8 @@ class WebSocketClient:
         if self._sock:
             try:
                 mask_key = urandom.getrandbits(32).to_bytes(4, "big")
-                self._sock.write(b"\x88\x80" + mask_key)
+                async with self._tx_lock:
+                    await self._sock_send(b"\x88\x80" + mask_key)
             except Exception:
                 pass
             try:
