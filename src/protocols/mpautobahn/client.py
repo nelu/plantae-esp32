@@ -12,26 +12,27 @@ def _is_awaitable(obj):
 
 
 class _RPCWaiter:
-    """Simple container to await a single RPC result."""
+    __slots__ = ("_flag", "result", "error")
 
     def __init__(self):
-        self._evt = asyncio.Event()
+        self._flag = asyncio.ThreadSafeFlag()
         self.result = None
         self.error = None
 
     async def wait(self):
-        await self._evt.wait()
+        await self._flag.wait()
         if self.error is not None:
             raise self.error
         return self.result
 
     def set_result(self, value):
         self.result = value
-        self._evt.set()
+        self._flag.set()
 
     def set_error(self, exc):
         self.error = exc
-        self._evt.set()
+        self._flag.set()
+
 
 
 class AutobahnWS:

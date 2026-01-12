@@ -261,14 +261,23 @@ class WebSocketClient:
             header = struct.pack("!BBQ", 0x81, 0x80 | 127, length)
 
         mask = urandom.getrandbits(32).to_bytes(4, "big")
-        masked = bytearray(length)
-        for i in range(length):
-            masked[i] = payload[i] ^ mask[i % 4]
+        mv = memoryview(payload)
 
-        async with self._lock():         # <-- ADD (covers the whole frame)
+        # choose a small chunk for SSL stability
+        chunk = 512 if self.use_ssl else 1460
+        tmp = bytearray(chunk)
+
+        async with self._lock():
             await self._sock_send(header)
             await self._sock_send(mask)
-            await self._sock_send(masked)  # keep as bytearray
+
+            off = 0
+            while off < length:
+                n = chunk if (length - off) > chunk else (length - off)
+                for i in range(n):
+                    tmp[i] = mv[off + i] ^ mask[(off + i) & 3]
+                await self._sock_send(tmp[:n])
+                off += n
 
         self._last_activity_ms = time.ticks_ms()
 
