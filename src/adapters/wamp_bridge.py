@@ -1,5 +1,4 @@
 import time
-import uasyncio as asyncio
 from protocols.mpautobahn import AutobahnWS, parse_ws_url
 from lib.logging import getLogger
 from version import VERSION, BUILD_DATE
@@ -14,6 +13,7 @@ class WampBridge:
         self.service = service
         self.client = None
         self._last_alive_state = False
+
 
     def _pfx(self):
         return self.cfg["wamp"].get("prefix", "org.robits.plantae.")
@@ -55,7 +55,9 @@ class WampBridge:
 
     async def connect(self):
         import gc
-        
+
+        gc.collect()
+
         url = self.cfg["wamp"]["url"]
         realm = self.cfg["wamp"].get("realm", "realm1")
         ka = self.cfg.get("wamp", {}).get("keepalive", {})
@@ -63,18 +65,13 @@ class WampBridge:
         self.client = None
         self.state.wamp_ok = False
 
-
-
         # Basic gc before connection
         gc.collect()
 
         # Parse ws:// / wss:// URL without urllib (reuse helper from ws_async)
         scheme, host, port, path = parse_ws_url(url)
         use_ssl = (scheme == "wss")
-        
-        # Check if we have a pre-resolved host for SNI (Disabled for standard DNS test)
-        # server_hostname = self.cfg["wamp"].get("original_host")
-        server_hostname = None
+
 
         # AutobahnWS handles both WebSocket and WAMP session handshake
         # Pass keepalive config for resilience over public internet
@@ -86,17 +83,33 @@ class WampBridge:
             use_ssl=use_ssl,
             ping_interval_s=ka.get("ping_interval_s"),
             idle_timeout_s=ka.get("idle_timeout_s"),
-            server_hostname=server_hostname,
+            server_hostname=None,
         )
+        # Check if we have a pre-resolved host for SNI (Disabled for standard DNS test)
+        # server_hostname = self.cfg["wamp"].get("original_host")
+
 
         # Set up the on_join callback to handle subscriptions/registrations
-        self.client.on_join(self._on_wamp_join)
+        # self.client.on_join(self._on_wamp_join)
 
         # Simple debug logging
         LOG.info("CONN: url=%s realm=%s", url, realm)
 
-        await self.client.connect()
-        await asyncio.sleep_ms(100)
+        # await self.client.connect()
+        # await asyncio.sleep_ms(100)
+
+        try:
+            await self.client.connect()
+            await self._on_wamp_join()  # do setup now, no Event/Flag needed
+
+        except Exception as e:
+            # make sure we drop sockets/refs so GC can reclaim things
+            self.state.last_error = e
+            try:
+                await self.close()
+            except Exception:
+                pass
+            raise
 
         self.state.wamp_ok = True
         self.state.last_error = None
@@ -104,29 +117,33 @@ class WampBridge:
 
     async def _on_wamp_join(self):
         """Called when WAMP session is joined - set up subscriptions and registrations"""
+        try:
+            await self.client.register(self._topic("control"), self.rpc_control)
+            await self.client.register(self._topic("calibrate"), self.rpc_calibrate)
+            await self.client.register(self._topic("dose"), self.rpc_dose)
+            await self.client.register(self._topic("output"), self.rpc_output)
+            await self.client.register(self._topic("status"), self.rpc_status)
 
-        await self.client.register(self._topic("control"), self.rpc_control)
-        await self.client.register(self._topic("calibrate"), self.rpc_calibrate)
-        await self.client.register(self._topic("dose"), self.rpc_dose)
-        await self.client.register(self._topic("output"), self.rpc_output)
-        await self.client.register(self._topic("status"), self.rpc_status)
+            await self.client.register(self._topic("restart"), self.rpc_reboot)
 
-        await self.client.register(self._topic("restart"), self.rpc_reboot)
+            for suf in self._addr_suffixes():
+                await self.client.register(self._addr_topic("calibrate", suf), self.rpc_calibrate)
+                await self.client.register(self._addr_topic("dose", suf), self.rpc_dose)
+                await self.client.register(self._addr_topic("output", suf), self.rpc_output)
+                await self.client.register(self._addr_topic("status", suf), self.rpc_status)
+                # await self.client.register(self._addr_topic("restart", suf), self.rpc_reboot)
+                await self.client.register(self._addr_topic("reset", suf), self.rpc_reset)
 
-        for suf in self._addr_suffixes():
-            await self.client.register(self._addr_topic("calibrate", suf), self.rpc_calibrate)
-            await self.client.register(self._addr_topic("dose", suf), self.rpc_dose)
-            await self.client.register(self._addr_topic("output", suf), self.rpc_output)
-            await self.client.register(self._addr_topic("status", suf), self.rpc_status)
-            # await self.client.register(self._addr_topic("restart", suf), self.rpc_reboot)
-            await self.client.register(self._addr_topic("reset", suf), self.rpc_reset)
+            await self.client.subscribe(self._topic("announce.master"), self.on_master)
+            LOG.info("before announce.online")
 
-        await self.client.subscribe(self._topic("announce.master"), self.on_master)
-        LOG.info("before announce.online")
+            await self.publish_announce("announce.online")
 
-        await self.publish_announce("announce.online")
-        
-        LOG.info("Setup completed")
+            LOG.info("Setup completed")
+        except Exception as e:
+            LOG.error("on_join/setup failed: %r", e)
+            raise
+
 
     async def close(self):
         import gc
@@ -165,7 +182,7 @@ class WampBridge:
         if exclude_me is not None:
              options["exclude_me"] = exclude_me
 
-        pub_id = await self.client.publish(self._topic(topic_name), kwargs=payload, acknowledge=False, options=options)
+        pub_id = await self.client.publish(self._topic(topic_name), kwargs=payload, acknowledge=True, options=options)
         LOG.debug("Announce published: %s pub_id=%s", topic_name, pub_id)
 
     async def publish_switch(self, idx, on):

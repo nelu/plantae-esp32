@@ -1,12 +1,9 @@
 """Minimal WebSocket client for MicroPython ESP32 using raw sockets."""
 import binascii
-import os
-import socket
 import struct
 import time
 import uasyncio as asyncio
 import urandom
-from .constants import WS_GUID
 from lib.logging import getLogger
 
 LOG = getLogger("ws")
@@ -26,23 +23,17 @@ class WebSocketClient:
         self._closed = False
         self._last_activity_ms = None
         self._rxbuf = b""
-        self._tx_lock = asyncio.Lock()
+        self._tx_lock = None
 
-
-    def _defrag_heap(self):
-        try:
-            import gc
-            gc.collect()
-            # Allocate large chunk to squash free space, then release
-            chunk_size = gc.mem_free() // 2
-            if chunk_size > 1024:
-                _ = bytearray(chunk_size)
-            gc.collect()
-        except:
-            pass
+    def _lock(self):
+        if self._tx_lock is None:
+            self._tx_lock = asyncio.Lock()
+        return self._tx_lock
 
     async def connect(self):
-        import uhashlib, gc
+        import gc, socket
+        from .constants import WS_GUID
+
         gc.collect()
         self._closed = False
         self._rxbuf = b""
@@ -58,7 +49,7 @@ class WebSocketClient:
 
         if self.use_ssl:
             import ssl
-            
+
             # Use provided SNI hostname, or fallback to connection host
             sni_host = self.server_hostname if self.server_hostname else self.host
             
@@ -74,14 +65,17 @@ class WebSocketClient:
             self._sock.settimeout(10) # 10s timeout (better than infinite hang)
             
             # Wrap WITH server_hostname (Essential for Cloudflare/VHosts)
-            if LOG: LOG.info("SSL: Wrapping socket (SNI: %s)...", sni_host)
+            LOG.info("SSL: Wrapping socket (SNI: %s)...", sni_host)
             try:
+                gc.collect()  # <--- add: right before wrap_socket
                 self._sock = ctx.wrap_socket(self._sock, server_hostname=sni_host)
-                if LOG: LOG.info("SSL: Handshake success")
             except Exception as e:
                 # OSErr 16 means we need more RAM/Compaction. 
                 # Retrying without SNI is futile for Cloudflare.
-                if LOG: LOG.error("SSL: Handshake failed: %s", e)
+                LOG.error("SSL: Handshake failed: %s", e)
+                # hard close immediately so next attempt isn't poisoned
+                self._force_close()
+                gc.collect()
                 raise
             
             # Restore timeout
@@ -89,8 +83,19 @@ class WebSocketClient:
         
         # Use SNI host for HTTP Header too
         http_host = self.server_hostname if self.server_hostname else self.host
-        
-        key_b64 = binascii.b2a_base64(os.urandom(16)).strip().decode()
+
+        # import os
+        # key_b64 = binascii.b2a_base64(os.urandom(16)).strip().decode()
+
+        # no os.urandom
+        key_raw = bytearray(16)
+        struct.pack_into("!I", key_raw, 0, urandom.getrandbits(32))
+        struct.pack_into("!I", key_raw, 4, urandom.getrandbits(32))
+        struct.pack_into("!I", key_raw, 8, urandom.getrandbits(32))
+        struct.pack_into("!I", key_raw, 12, urandom.getrandbits(32))
+
+        key_b64 = binascii.b2a_base64(key_raw).strip().decode()
+
         req = ("GET %s HTTP/1.1\r\nHost: %s:%d\r\nUpgrade: websocket\r\n"
                "Connection: Upgrade\r\nSec-WebSocket-Key: %s\r\n"
                "Sec-WebSocket-Version: 13\r\nSec-WebSocket-Protocol: %s\r\n\r\n"
@@ -115,6 +120,7 @@ class WebSocketClient:
                 pass
 
         self._sock.setblocking(False)
+        import uhashlib
 
         expected = binascii.b2a_base64(uhashlib.sha1((key_b64 + WS_GUID).encode()).digest()).strip().decode()
         if headers.get("sec-websocket-accept", "") != expected:
@@ -132,7 +138,7 @@ class WebSocketClient:
         try:
             mask_key = urandom.getrandbits(32).to_bytes(4, "big")
             header = struct.pack("!BB", 0x89, 0x80)
-            async with self._tx_lock:     # <-- ADD
+            async with self._lock():     # <-- ADD
                 await self._sock_send(header + mask_key)
             self._last_activity_ms = time.ticks_ms()
         except Exception:
@@ -144,7 +150,7 @@ class WebSocketClient:
             raise OSError("Socket not connected")
 
         if max_chunk is None:
-            max_chunk = 1024 if self.use_ssl else 1460
+            max_chunk = 512 if self.use_ssl else 1460
 
         mv = memoryview(data)
         total, sent = len(data), 0
@@ -240,7 +246,7 @@ class WebSocketClient:
         masked = bytearray(plen)
         for i in range(plen):
             masked[i] = payload[i] ^ mask[i % 4]
-        async with self._tx_lock:         # <-- ADD
+        async with self._lock():         # <-- ADD
             await self._sock_send(hdr + mask + bytes(masked))
 
     async def send_text(self, data):
@@ -259,8 +265,10 @@ class WebSocketClient:
         for i in range(length):
             masked[i] = payload[i] ^ mask[i % 4]
 
-        async with self._tx_lock:         # <-- ADD (covers the whole frame)
-            await self._sock_send(header + mask + bytes(masked))
+        async with self._lock():         # <-- ADD (covers the whole frame)
+            await self._sock_send(header)
+            await self._sock_send(mask)
+            await self._sock_send(masked)  # keep as bytearray
 
         self._last_activity_ms = time.ticks_ms()
 
@@ -323,7 +331,7 @@ class WebSocketClient:
         if self._sock:
             try:
                 mask_key = urandom.getrandbits(32).to_bytes(4, "big")
-                async with self._tx_lock:
+                async with self._lock():
                     await self._sock_send(b"\x88\x80" + mask_key)
             except Exception:
                 pass
