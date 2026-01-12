@@ -1,6 +1,8 @@
 import uasyncio as asyncio
 import time
+from adapters.http_api import HttpApi
 from machine import I2C, Pin, reset
+from app.device_id import get_device_id
 
 from lib.logging import Logger
 
@@ -45,13 +47,13 @@ def configure_logging(cfg):
     # Base/root level (also used for handler threshold)
     base_level = level_map.get(log_cfg.get("level", "WARNING"), WARNING)
 
-    # Formatting: you control it via config; you can switch to the "official" style string there.
-    log_format = log_cfg.get("format", "%(asctime)s %(levelname)s:%(name)s:%(message)s")
-    datefmt = log_cfg.get("datefmt", "%H:%M:%S")
 
     # basicConfig sets up root logger + one StreamHandler + Formatter
     # force=True prevents duplicated handlers if this runs multiple times
-    basicConfig(level=base_level, format=log_format, datefmt=datefmt, force=True)
+    basicConfig(level=base_level,
+                format="%(asctime)s %(levelname)s:%(name)s:%(message)s",
+                datefmt="%H:%M:%S",
+                force=True)
 
     root = getLogger()
 
@@ -75,7 +77,6 @@ class Supervisor:
     def __init__(self, config_path="config.json"):
         from adapters.wifi import Wifi
         from domain.state import DeviceState
-        from app.device_id import get_device_id
         from adapters.config_manager import ConfigManager
 
         import gc
@@ -101,7 +102,8 @@ class Supervisor:
 
         self._reboot_at = None
         self.wamp = None
-
+        self.http_server = None
+        self.http_api = None
         
         # Initialize centralized device service (empty initially)
         from domain.device_service import DeviceService
@@ -152,6 +154,7 @@ class Supervisor:
         from drivers.flowsensor.flowsensor import FlowSensor
         from drivers.flowsensor import types as flowtypes
         from domain.controllers import SwitchBank
+        from domain.dosing import DosingController
 
         pwm_cfg = self.cfg["outputs"]["pwm"]
 
@@ -172,7 +175,6 @@ class Supervisor:
         self.service.pwm = PwmOut(pwm_cfg["pin"], pwm_cfg.get("freq",20000), pwm_cfg.get("active_low",False))
 
         # Initialize dosing controller
-        from domain.dosing import DosingController
         self.dosing_controller = DosingController(self.flow, self.service.pwm, self.cfg)
         
         # Update service with initialized components
@@ -181,22 +183,55 @@ class Supervisor:
         self.service.switches = self.switchbank
 
     async def task_wifi(self):
-        """Monitor WiFi connection and reconnect if dropped."""
+        ap_name = get_device_id(self.cfg)
+
+        disconnected_s = 0
+        sta_enabled = True
+
         while True:
             try:
-                if not self.wifi.is_connected():
-                    if LOG: LOG.warning("WiFi disconnected, attempting to reconnect...")
-                    await self.wifi.ensure(self.cfg["wifi"]["ssid"], self.cfg["wifi"]["password"])
-                
-                # Check actual state and update IP regardless of whether we just connected or were already connected
-                if self.wifi.is_connected():
-                    new_ip = self.wifi.ip()
-                    if self.state.ip != new_ip:
-                         self.state.ip = new_ip
-                         if LOG: LOG.info("WiFi IP: %s", self.state.ip)
+                ssid = (self.cfg.get("wifi") or {}).get("ssid") or ""
+                pwd = (self.cfg.get("wifi") or {}).get("password") or ""
+
+                if not ssid:
+                    # Awaiting-config: AP only, keep things simple
+                    if sta_enabled:
+                        try:
+                            self.wifi.sta.active(False)
+                        except Exception:
+                            pass
+                        sta_enabled = False
+
+                    self.wifi.start_ap(ap_name)
+                    self.state.ip = self.wifi.ap_ip()
+                    disconnected_s = 0
+                    await asyncio.sleep(2)
+                    continue
+
+                # We have credentials: ensure STA enabled
+                if not sta_enabled:
+                    try:
+                        self.wifi.sta.active(True)
+                    except Exception:
+                        pass
+                    sta_enabled = True
+
+                ok = await self.wifi.ensure(ssid, pwd)
+                if ok:
+                    disconnected_s = 0
+                    self.state.ip = self.wifi.ip()
+                    # Optional: turn off AP once STA is stable
+                    self.wifi.stop_ap()
+                else:
+                    disconnected_s += 5
+                    if disconnected_s >= 30:
+                        self.wifi.start_ap(ap_name)
+
+                await asyncio.sleep(5)
+
             except Exception as e:
-                if LOG: LOG.error("WiFi Monitor Error: %s", e)
-            await asyncio.sleep(5) 
+                LOG.error("task_wifi error: %r", e)
+                await asyncio.sleep(2)
 
     async def task_ntp(self):
         from adapters.ntp import sync as ntp_sync
@@ -281,12 +316,15 @@ class Supervisor:
             await asyncio.sleep_ms(50)
 
     async def task_http(self):
-        from adapters.http_api import HttpApi
+        # Start ASAP, regardless of STA connected state (so AP provisioning works)
+        if self.http_server is None:
+            self.http_api = HttpApi(self.service)
+            self.http_server = await self.http_api.serve(port=80)
+            LOG.info("task_http: listening on :80")
 
-        api = HttpApi(self.service)
-        await api.serve(port=80)
-        while True:
-            await asyncio.sleep(3600)
+        # Block forever; do NOT call serve() again
+        evt = asyncio.Event()
+        await evt.wait()
 
     def _patch_cfg(self, patch):
         if self.cfg_mgr:
@@ -434,8 +472,9 @@ class Supervisor:
             LOG.info("Hardware initialized successfully")
             # Start essential tasks first
             asyncio.create_task(self.task_wifi())
+            asyncio.create_task(self.task_http())  # <-- start early
             asyncio.create_task(self.task_ntp())
-            
+
             # Start WAMP connection with minimal concurrent tasks
             asyncio.create_task(self.task_wamp())
             while not self.state.wamp_ok:
@@ -444,7 +483,6 @@ class Supervisor:
             # Only after WAMP is connected, start other memory-intensive tasks
             self._init_hw()
             
-            asyncio.create_task(self.task_http())
             asyncio.create_task(self.task_flow())
             asyncio.create_task(self.task_pwm_schedule())
             asyncio.create_task(self.task_pwm_test_btn())

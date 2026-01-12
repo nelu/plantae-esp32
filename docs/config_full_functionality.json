@@ -62,12 +62,12 @@
       "start": "17:00",
       "end": "17:10",
       "output": "pwm",
+      "duty": 0.5,
       "quantity": 0.25
     }
   },
   "logging": {
     "level": "DEBUG",
-    "format": "%(asctime)s %(levelname)s:%(name)s:%(message)s",
     "loggers": {
       "root": "DEBUG",
       "ws": "DEBUG",

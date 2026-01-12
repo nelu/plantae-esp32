@@ -13,7 +13,7 @@ class DosingController:
         self.dose_start_volume = 0.0
         self.target_quantity = 0.0
         self.dose_start_time = 0
-        self.timeout_s = 300  # 5 minute timeout for safety
+        self.timeout_s = 60  # 5 minute timeout for safety
         self.last_auto_dose_day = -1  # Track daily auto-dosing
         
     def _parse_time(self, time_str):
@@ -40,6 +40,8 @@ class DosingController:
             
         dosing_cfg = self.config.get("schedule", {}).get("dosing", {})
         output_name = dosing_cfg.get("output", "pwm")
+        output_duty = dosing_cfg.get("duty", 0.5)
+
         
         if output_name != "pwm":
             LOG.error("Only PWM output supported for dosing currently")
@@ -52,11 +54,11 @@ class DosingController:
         self.dose_start_time = time.time()
         
         # Start the output at full duty
-        self.output_controller.set(1.0)
+        self.output_controller.set(output_duty)
         
-        LOG.info("Started dosing %.3f L (start_volume=%.3f L) %s", 
+        LOG.info("Started dosing %.3f L (start_volume=%.3f L) %s duty %.3f",
                  self.target_quantity, self.dose_start_volume, 
-                 "(manual)" if is_manual else "(auto)")
+                 "(manual)" if is_manual else "(auto)", output_duty)
         return True
     
     def stop_dose(self):

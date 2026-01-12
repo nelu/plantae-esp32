@@ -164,7 +164,7 @@ class WampBridge:
 
     async def publish_announce(self, topic_name, exclude_me=True):
 
-        LOG.debug("publish_announce: %s", topic_name)
+        # LOG.debug("publish_announce: %s", topic_name)
 
         # require a joined session
         if not self.client.is_connected():
@@ -182,8 +182,8 @@ class WampBridge:
         if exclude_me is not None:
              options["exclude_me"] = exclude_me
 
-        pub_id = await self.client.publish(self._topic(topic_name), kwargs=payload, acknowledge=True, options=options)
-        LOG.debug("Announce published: %s pub_id=%s", topic_name, pub_id)
+        pub_id = await self.client.publish(self._topic(topic_name), kwargs=payload, acknowledge=False, options=options)
+        # LOG.debug("Announce published: %s pub_id=%s", topic_name, pub_id)
 
     async def publish_switch(self, idx, on):
         if not self.client: return
@@ -196,6 +196,8 @@ class WampBridge:
             await self.client.publish(self._addr_topic("sense", suf), kwargs=payload)
 
     async def publish_status(self):
+        # LOG.debug("publish_status")
+
         if not self.client: return
         snap = self.state.snapshot()
         for suf in self._addr_suffixes():

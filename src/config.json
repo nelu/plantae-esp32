@@ -1,7 +1,7 @@
 {
   "wifi": {
-    "ssid": "Voda24",
-    "password": "etajul28"
+    "ssid": "",
+    "password": ""
   },
   "ntp": {
     "host": "pool.ntp.org",
@@ -50,24 +50,18 @@
   "schedule": {
     "tz_offset_min": 120,
     "pwm": [
-      {
-        "start": "20:00",
-        "end": "20:10",
-        "duty": 0.5,
-        "interval": 100,
-        "time_on": 10
-      }
+
     ],
     "dosing": {
       "start": "17:00",
       "end": "17:10",
       "output": "pwm",
+      "duty": 0.5,
       "quantity": 0.25
     }
   },
   "logging": {
     "level": "DEBUG",
-    "format": "%(asctime)s %(levelname)s:%(name)s:%(message)s",
     "loggers": {
       "root": "DEBUG",
       "ws": "DEBUG",
