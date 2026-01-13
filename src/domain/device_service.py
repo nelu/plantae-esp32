@@ -1,6 +1,5 @@
-from lib.logging import getLogger
+from lib.logging import LOG
 
-LOG = getLogger("service")
 
 class DeviceService:
     __slots__ = (

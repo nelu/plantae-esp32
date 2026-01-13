@@ -4,7 +4,6 @@ import ujson as json
 
 DEFAULT = {
     "wifi": {"ssid": "", "password": ""},
-    "ntp": {"host": "pool.ntp.org", "sync_every_s": 21600},
     "wamp": {
         "url": "wss://plantae.robits.org/ws",
         "realm": "realm1",
@@ -12,40 +11,7 @@ DEFAULT = {
         "keepalive": {
             "ping_interval_s": 25,
             "idle_timeout_s": 180
-        }},
-    "flow": {
-        "type": "YFS401",
-        "pin": 34,
-        "calibration": 5880,
-        "read_interval_ms": 1000,
-        "pullup_external": True
-    },
-    "inputs": {
-        "pwm_test_btn": {
-            "pin": 35,
-            "active_low": False,
-            "test_duty": 0.5
         }
-    },
-    "outputs": {
-        "pwm": {
-            "pin": 2,
-            "freq": 100,
-            "active_low": False
-        }
-    },
-    "schedule": {
-    "tz_offset_min": 120,
-    "pwm": [
-
-    ],
-    "dosing": {
-      "start": "19:00",
-      "end": "19:03",
-      "output": "pwm",
-      "duty": 0.5,
-      "quantity": 0.15
-    }
   }
 }
 

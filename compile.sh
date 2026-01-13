@@ -34,7 +34,6 @@ FILES=(
     "adapters/ntp.py"
     "adapters/http_api.py"
 
-    "app/bootstrap.py"
     "app/supervisor.py"
     "app/device_id.py"
     "app/provision.py"

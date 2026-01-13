@@ -1,8 +1,6 @@
 import time
 
-from lib.logging import getLogger
-LOG = getLogger("dosing")
-
+from lib.logging import LOG
 
 class DosingController:
     def __init__(self, flow_sensor, output_controller, config):

@@ -3,6 +3,8 @@ import time, gc
 UNIX_EPOCH_OFFSET = 946684800
 class DeviceState:
     def __init__(self, device_id):
+        from version import VERSION, BUILD_DATE
+
         self.device_id = device_id
         self.boot_ms = time.ticks_ms()
         self.flow_lps = 0.0
@@ -16,12 +18,14 @@ class DeviceState:
         self.ntp_ok = False
         self.wamp_ok = False
         self.last_error = ""
+        self.version = VERSION
+        self.build = BUILD_DATE
 
     def uptime_s(self):
         return time.ticks_diff(time.ticks_ms(), self.boot_ms)//1000
 
     def snapshot(self):
-
+        gc.collect()
         return {
             "id": self.device_id,
             "ip": self.ip,

@@ -1,9 +1,5 @@
 import time
-from lib.logging import getLogger
-from version import VERSION, BUILD_DATE
-
-
-LOG = getLogger()
+from lib.logging import LOG
 
 class WampBridge:
     def __init__(self, cfg, state, service):
@@ -64,8 +60,7 @@ class WampBridge:
 
         self.client = None
         self.state.wamp_ok = False
-        LOG.info("connecting: url=%s realm=%s" % (url, realm))
-        #LOG.info("connected: %s (%s)", url, realm)
+        LOG.info("connect: url=%s realm=%s", url, realm)
 
         # Basic gc before connection
         gc.collect()
@@ -159,12 +154,11 @@ class WampBridge:
 
         # require a joined session
         if not self.client.is_connected():
-            LOG.warning("publish_announce: is_connected false  %s" % topic_name)
             return
 
         payload = {"id": self.state.device_id, "ip": self.state.ip,
-                   "ver": VERSION,
-                   "build": BUILD_DATE,
+                   "ver": self.state.version,
+                   "build": self.state.build,
                    "ts": time.time(),
                    "config": self.cfg
                    }
@@ -173,7 +167,7 @@ class WampBridge:
         if exclude_me is not None:
              options["exclude_me"] = exclude_me
 
-        pub_id = await self.client.publish(self._topic(topic_name), kwargs=payload, acknowledge=False, options=options)
+        pub_id = await self.client.publish(self._topic(topic_name), kwargs=payload, acknowledge=True, options=options)
         # LOG.debug("Announce published: %s pub_id=%s", topic_name, pub_id)
 
     async def publish_switch(self, idx, on):
@@ -198,8 +192,7 @@ class WampBridge:
         await self.publish_announce("announce.online")
 
     async def rpc_control(self, args, kwargs, details):
-        if not self.service:
-            return {"error": "service_not_initialized"}
+
         if "all" in kwargs:
             return self.service.set_all_switches(bool(kwargs["all"]))
         if "switch" in kwargs:
@@ -213,16 +206,12 @@ class WampBridge:
         return False
 
     async def rpc_calibrate(self, args, kwargs, details):
-        if not self.service:
-            return {"error": "service_not_initialized"}
         if kwargs.get("type") == "flow" and "calibration" in kwargs:
             cal = int(kwargs["calibration"])
             return self.service.patch_config({"flow": {"calibration": cal}})
         return False
 
     async def rpc_dose(self, args, kwargs, details):
-        if not self.service:
-            return {"error": "service_not_initialized"}
         """Handle dosing RPC calls"""
         action = kwargs.get("action", "status")
         
@@ -248,8 +237,6 @@ class WampBridge:
             return {"error": "unknown_action", "action": action}
 
     async def rpc_output(self, args, kwargs, details):
-        # if not self.service:
-        #     return {"error": "service_not_initialized"}
         """Handle output control RPC calls"""
         name = kwargs.get("name", "pwm")
         duty = kwargs.get("duty", 1.0)
@@ -271,19 +258,13 @@ class WampBridge:
 
 
     async def rpc_status(self, args, kwargs, details):
-        if not self.service:
-            return {"error": "service_not_initialized"}
         """Get device status including dosing information"""
         return self.service.get_status()
 
     async def rpc_reset(self, args, kwargs, details):
-        if not self.service:
-            return {"error": "service_not_initialized"}
         return self.service.reset_counters()
 
     async def rpc_reboot(self, args, kwargs, details):
-        if not self.service:
-            return {"error": "service_not_initialized"}
         t = 1
         if args:
             try: t = int(args[0])
