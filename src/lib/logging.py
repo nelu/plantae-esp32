@@ -71,15 +71,6 @@ class StreamHandler(Handler):
             self.stream.write(self.format(record) + self.terminator)
 
 
-class FileHandler(StreamHandler):
-    def __init__(self, filename, mode="a", encoding="UTF-8"):
-        super().__init__(stream=open(filename, mode=mode, encoding=encoding))
-
-    def close(self):
-        super().close()
-        self.stream.close()
-
-
 class Formatter:
     def __init__(self, fmt=None, datefmt=None):
         self.fmt = _default_fmt if fmt is None else fmt
@@ -218,13 +209,10 @@ def addLevelName(level, name):
 
 
 def basicConfig(
-    filename=None,
-    filemode="a",
     format=None,
     datefmt=None,
     level=WARNING,
     stream=None,
-    encoding="UTF-8",
     force=False,
 ):
     if "root" not in _loggers:
@@ -237,10 +225,7 @@ def basicConfig(
             h.close()
         logger.handlers = []
 
-        if filename is None:
-            handler = StreamHandler(stream)
-        else:
-            handler = FileHandler(filename, filemode, encoding)
+        handler = StreamHandler(stream)
 
         handler.setLevel(level)
         handler.setFormatter(Formatter(format, datefmt))

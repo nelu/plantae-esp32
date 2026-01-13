@@ -28,13 +28,13 @@ class Wifi:
             for _ in range(int(timeout_s * 2)):
                 if self.sta.isconnected():
                     return True
-                await asyncio.sleep(0.5)
+                await asyncio.sleep(1)
             return self.sta.isconnected()
 
         # Throttle connect attempts (avoid hammering driver)
         now = time.ticks_ms()
         if time.ticks_diff(now, self._last_connect_ms) < 5000:
-            await asyncio.sleep(1)
+            await asyncio.sleep(2)
             return self.sta.isconnected()
         self._last_connect_ms = now
 
@@ -44,7 +44,7 @@ class Wifi:
             # Driver got upset: reset interface and try again next loop
             try:
                 self.sta.active(False)
-                await asyncio.sleep(1)
+                await asyncio.sleep(2)
                 self.sta.active(True)
             except Exception:
                 pass
@@ -54,7 +54,7 @@ class Wifi:
         for _ in range(int(timeout_s * 2)):
             if self.sta.isconnected():
                 return True
-            await asyncio.sleep(0.5)
+            await asyncio.sleep(1)
 
         return self.sta.isconnected()
 

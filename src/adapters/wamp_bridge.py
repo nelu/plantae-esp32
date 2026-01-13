@@ -248,8 +248,8 @@ class WampBridge:
             return {"error": "unknown_action", "action": action}
 
     async def rpc_output(self, args, kwargs, details):
-        if not self.service:
-            return {"error": "service_not_initialized"}
+        # if not self.service:
+        #     return {"error": "service_not_initialized"}
         """Handle output control RPC calls"""
         name = kwargs.get("name", "pwm")
         duty = kwargs.get("duty", 1.0)

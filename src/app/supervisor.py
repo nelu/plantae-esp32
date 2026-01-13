@@ -160,26 +160,26 @@ class Supervisor:
 
 
     def _init_hw(self):
-        from drivers.pca9685 import PCA9685
-        from machine import I2C, Pin
+        # from drivers.pca9685 import PCA9685
+        # from machine import I2C, Pin
+        # from domain.controllers import SwitchBank
 
         from drivers.pwm_out import PwmOut
         from drivers.flowsensor.flowsensor import FlowSensor
         from drivers.flowsensor import types as flowtypes
-        from domain.controllers import SwitchBank
         from domain.dosing import DosingController
 
         pwm_cfg = self.cfg["outputs"]["pwm"]
 
-        pca_cfg = self.cfg["outputs"]["pca9685"]
-        if pca_cfg.get("enabled", True):
-            i2c = I2C(int(pca_cfg.get("i2c_id",0)),
-                      scl=Pin(int(pca_cfg.get("scl",22))),
-                      sda=Pin(int(pca_cfg.get("sda",21))),
-                      freq=int(pca_cfg.get("freq",400000)))
-            pca = PCA9685(i2c, int(pca_cfg.get("addr",64)))
-            pca.set_pwm_freq(int(pca_cfg.get("pwm_freq",1000)))
-            self.switchbank = SwitchBank(pca, channels=int(pca_cfg.get("channels",16)))
+        # pca_cfg = self.cfg["outputs"]["pca9685"]
+        # if pca_cfg.get("enabled", True):
+        #     i2c = I2C(int(pca_cfg.get("i2c_id",0)),
+        #               scl=Pin(int(pca_cfg.get("scl",22))),
+        #               sda=Pin(int(pca_cfg.get("sda",21))),
+        #               freq=int(pca_cfg.get("freq",400000)))
+        #     pca = PCA9685(i2c, int(pca_cfg.get("addr",64)))
+        #     pca.set_pwm_freq(int(pca_cfg.get("pwm_freq",1000)))
+        #     self.switchbank = SwitchBank(pca, channels=int(pca_cfg.get("channels",16)))
 
         fcfg = self.cfg["flow"]
         ppl = getattr(flowtypes, fcfg.get("type","YFS401"), flowtypes.YFS401)
@@ -223,7 +223,7 @@ class Supervisor:
                     pwd = wifi_cfg.get("password")
 
                     if ssid and not self.wifi.is_connected():
-                        if LOG: LOG.warning("WiFi disconnected, attempting to reconnect...")
+                        LOG.warning("WiFi disconnected, attempting to reconnect...")
                         await self.wifi.ensure(ssid, pwd)
 
                     if self.wifi.is_connected():
@@ -462,19 +462,21 @@ class Supervisor:
             asyncio.create_task(self.task_wifi())
 
             if self.is_provisioning:
-                LOG.warning("Provisioning mode: AP + provisioning HTTP only")
+                LOG.info("Provisioning mode")
                 asyncio.create_task(self.task_http())
 
                 # just idle; provisioning endpoint will save config + reboot
                 while True:
                     await asyncio.sleep(1)
 
+            # dont run any task without wifi
+            while not self.wifi.is_connected():
+                await asyncio.sleep(2)
+
             # normal mode continues:
             asyncio.create_task(self.task_ntp())
-            asyncio.create_task(self.task_wamp())
-
-            while not self.state.wamp_ok:
-                await asyncio.sleep(1)
+            import gc
+            gc.collect()
 
             if self.service is None:
                 from domain.device_service import DeviceService
@@ -484,16 +486,27 @@ class Supervisor:
                     self.schedule_reboot
                 )
 
+            asyncio.create_task(self.task_wamp())
+            gc.collect()
+
+            while not self.state.wamp_ok:
+                await asyncio.sleep(1)
+
+
+
+            gc.collect()
+
+            self._init_hw()
+            gc.collect()
             if self.wamp:
                 self.wamp.service = self.service
                 # Only after WAMP is connected, start other memory-intensive tasks
-            self._init_hw()
-
+            gc.collect()
             asyncio.create_task(self.task_flow())
             asyncio.create_task(self.task_pwm_schedule())
             asyncio.create_task(self.task_pwm_test_btn())
             asyncio.create_task(self.task_dosing())
-
+            gc.collect()
             
             LOG.info("All tasks started successfully")
 

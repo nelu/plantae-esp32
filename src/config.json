@@ -35,16 +35,6 @@
       "pin": 2,
       "freq": 100,
       "active_low": false
-    },
-    "pca9685": {
-      "enabled": false,
-      "i2c_id": 0,
-      "scl": 22,
-      "sda": 21,
-      "addr": 64,
-      "freq": 400000,
-      "channels": 16,
-      "pwm_freq": 1000
     }
   },
   "schedule": {
