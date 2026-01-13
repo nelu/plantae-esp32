@@ -1,43 +1,86 @@
-import ujson as json
 import os
 
+import ujson as json
+
 DEFAULT = {
-  "config_version": 1,
-  "device": {"name": "", "id": ""},
-  "wifi": {"ssid": "", "password": ""},
-  "ntp": {"host": "pool.ntp.org", "sync_every_s": 21600},
-  "time": {"last_mpy_s": 0},
-  "wamp": {"url": "ws://10.0.0.1:8080/ws", "realm": "realm1", "prefix": "org.robits.plantae.", "legacy_by_ip": True, "keepalive": {"ping_interval_s": 20, "idle_timeout_s": 60}},
-  "flow": {"type": "YFS401", "pin": 14, "calibration": 5880, "read_interval_ms": 1000, "pullup_external": True},
-  "outputs": {
-    "pwm": {"pin": 25, "freq": 20000, "active_low": False},
-    "pca9685": {"enabled": True, "i2c_id": 0, "scl": 22, "sda": 21, "addr": 64, "freq": 400000, "channels": 16, "pwm_freq": 1000}
-  },
-  "schedule": {"tz_offset_min": 0, "pwm": []}
+    "wifi": {"ssid": "", "password": ""},
+    "ntp": {"host": "pool.ntp.org", "sync_every_s": 21600},
+    "wamp": {
+        "url": "wss://plantae.robits.org/ws",
+        "realm": "realm1",
+        "prefix": "org.robits.plantae.",
+        "keepalive": {
+            "ping_interval_s": 25,
+            "idle_timeout_s": 180
+        }},
+    "flow": {
+        "type": "YFS401",
+        "pin": 34,
+        "calibration": 5880,
+        "read_interval_ms": 1000,
+        "pullup_external": True
+    },
+    "inputs": {
+        "pwm_test_btn": {
+            "pin": 35,
+            "active_low": False,
+            "test_duty": 0.5
+        }
+    },
+    "outputs": {
+        "pwm": {
+            "pin": 2,
+            "freq": 100,
+            "active_low": False
+        }
+    },
+    "schedule": {
+    "tz_offset_min": 120,
+    "pwm": [
+
+    ],
+    "dosing": {
+      "start": "19:00",
+      "end": "19:03",
+      "output": "pwm",
+      "duty": 0.5,
+      "quantity": 0.15
+    }
+  }
 }
+
 
 def _merge(dst, src):
     for k, v in src.items():
-        if isinstance(v, dict) and isinstance(dst.get(k), dict):
+        if isinstance(v, dict):
+            # ensure we don't share dict objects from DEFAULT / patch
+            if not isinstance(dst.get(k), dict):
+                dst[k] = {}
             _merge(dst[k], v)
+        elif isinstance(v, list):
+            # avoid sharing lists (e.g. schedule.pwm)
+            dst[k] = list(v)
         else:
             dst[k] = v
 
+
 def _validate(cfg):
-    flow = cfg.get("flow", {})
+    flow = cfg.setdefault("flow", {})
     flow["pin"] = int(flow.get("pin", 14))
-    flow["calibration"] = int(flow.get("calibration", 0))
+    flow["calibration"] = int(flow.get("calibration", 5880))
     flow["read_interval_ms"] = int(flow.get("read_interval_ms", 1000))
     flow["pullup_external"] = bool(flow.get("pullup_external", True))
 
-    pwm = cfg.get("outputs", {}).get("pwm", {})
-    pwm["pin"] = int(pwm.get("pin", 25))
-    pwm["freq"] = int(pwm.get("freq", 20000))
+    outputs = cfg.setdefault("outputs", {})
+    pwm = outputs.setdefault("pwm", {})
+    pwm["pin"] = int(pwm.get("pin", 2))
+    pwm["freq"] = int(pwm.get("freq", 1000))
     pwm["active_low"] = bool(pwm.get("active_low", False))
 
-    ntp = cfg.get("ntp", {})
+    ntp = cfg.setdefault("ntp", {})
     ntp["sync_every_s"] = int(ntp.get("sync_every_s", 21600))
     return cfg
+
 
 class ConfigManager:
     def __init__(self, path="config.json"):

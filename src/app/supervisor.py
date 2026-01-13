@@ -1,6 +1,5 @@
 import uasyncio as asyncio
 import time
-from adapters.http_api import HttpApi
 from machine import I2C, Pin, reset
 from app.device_id import get_device_id
 
@@ -75,7 +74,6 @@ LOG: Logger | None = None
 
 class Supervisor:
     def __init__(self, config_path="config.json"):
-        from adapters.wifi import Wifi
         from domain.state import DeviceState
         from adapters.config_manager import ConfigManager
 
@@ -94,8 +92,18 @@ class Supervisor:
 
         self.device_id = get_device_id(self.cfg)
         self.state = DeviceState(self.device_id)
-        
-        self.wifi = Wifi()
+
+        wifi_cfg = self.cfg.get("wifi") or {}
+        ssid = (wifi_cfg.get("ssid") or "").strip()
+        self.is_provisioning = not ssid
+
+        if self.is_provisioning:
+            from app.provision import ProvisionWifi
+            self.wifi = ProvisionWifi()
+        else:
+            from adapters.wifi import Wifi
+            self.wifi = Wifi()
+
         self.switchbank = None
         self.flow = None
         self.dosing_controller = None
@@ -183,55 +191,51 @@ class Supervisor:
         self.service.switches = self.switchbank
 
     async def task_wifi(self):
-        ap_name = get_device_id(self.cfg)
-
-        disconnected_s = 0
-        sta_enabled = True
+        """Provisioning: start AP only. Normal: keep STA connected."""
+        ap_started = False
+        ap_name = self.device_id  # or whatever naming you use
 
         while True:
             try:
-                ssid = (self.cfg.get("wifi") or {}).get("ssid") or ""
-                pwd = (self.cfg.get("wifi") or {}).get("password") or ""
-
-                if not ssid:
-                    # Awaiting-config: AP only, keep things simple
-                    if sta_enabled:
+                if self.is_provisioning:
+                    if not ap_started:
+                        self.wifi.start_ap(ap_name)
                         try:
                             self.wifi.sta.active(False)
                         except Exception:
                             pass
-                        sta_enabled = False
+                        ap_started = True
 
-                    self.wifi.start_ap(ap_name)
-                    self.state.ip = self.wifi.ap_ip()
-                    disconnected_s = 0
-                    await asyncio.sleep(2)
-                    continue
+                    new_ip = self.wifi.ap_ip()
+                    if self.state.ip != new_ip:
+                        self.state.ip = new_ip
+                        if LOG: LOG.info("AP IP: %s", self.state.ip)
 
-                # We have credentials: ensure STA enabled
-                if not sta_enabled:
-                    try:
-                        self.wifi.sta.active(True)
-                    except Exception:
-                        pass
-                    sta_enabled = True
-
-                ok = await self.wifi.ensure(ssid, pwd)
-                if ok:
-                    disconnected_s = 0
-                    self.state.ip = self.wifi.ip()
-                    # Optional: turn off AP once STA is stable
-                    self.wifi.stop_ap()
                 else:
-                    disconnected_s += 5
-                    if disconnected_s >= 30:
-                        self.wifi.start_ap(ap_name)
+                    # Station mode (your current logic, but safer .get())
+                    wifi_cfg = self.cfg.get("wifi") or {}
+                    ssid = wifi_cfg.get("ssid")
+                    pwd = wifi_cfg.get("password")
 
-                await asyncio.sleep(5)
+                    if ssid and not self.wifi.is_connected():
+                        if LOG: LOG.warning("WiFi disconnected, attempting to reconnect...")
+                        await self.wifi.ensure(ssid, pwd)
+
+                    if self.wifi.is_connected():
+                        new_ip = self.wifi.ip()
+                        if self.state.ip != new_ip:
+                            self.state.ip = new_ip
+                            if LOG: LOG.info("WiFi IP: %s", self.state.ip)
 
             except Exception as e:
-                LOG.error("task_wifi error: %r", e)
-                await asyncio.sleep(2)
+                if LOG: LOG.error("WiFi Monitor Error: %s", e)
+
+            await asyncio.sleep(5)
+
+    async def task_reboot_watch(self):
+        while True:
+            self._maybe_reboot()
+            await asyncio.sleep_ms(200)
 
     async def task_ntp(self):
         from adapters.ntp import sync as ntp_sync
@@ -316,13 +320,21 @@ class Supervisor:
             await asyncio.sleep_ms(50)
 
     async def task_http(self):
-        # Start ASAP, regardless of STA connected state (so AP provisioning works)
         if self.http_server is None:
-            self.http_api = HttpApi(self.service)
+            if self.is_provisioning:
+                from app.provision import ProvisionHttp
+                self.http_api = ProvisionHttp(
+                    self.service,
+                    self.wifi,
+                    html_path="/provision.html"
+                )
+            else:
+                from adapters.http_api import HttpApi
+                self.http_api = HttpApi(self.service)
+
             self.http_server = await self.http_api.serve(port=80)
             LOG.info("task_http: listening on :80")
 
-        # Block forever; do NOT call serve() again
         evt = asyncio.Event()
         await evt.wait()
 
@@ -335,13 +347,12 @@ class Supervisor:
 
     async def task_wamp(self):
         if LOG: LOG.info("task_wamp: started")
+        import gc
 
         backoff = 1
         ntp_quiet_done = False
 
         while True:
-            # import network
-            # if not network.WLAN(network.STA_IF).isconnected():
             if not self.wifi.is_connected():
                 await asyncio.sleep(2)
                 continue
@@ -357,15 +368,11 @@ class Supervisor:
                 await asyncio.sleep(3)
 
             try:
-                import gc
-                gc.collect()
-                LOG.info("WAMP attempt. Free: %d", gc.mem_free())
-                
                 from adapters.wamp_bridge import WampBridge
+                LOG.info("WAMP connect attempt. Free: %d", gc.mem_free())
+                gc.collect()
                 self.wamp = WampBridge(self.cfg, self.state, self.service)
-                LOG.info("task_wamp: connecting...")
 
-                import gc
                 gc.collect()
                 await asyncio.sleep_ms(0)
 
@@ -383,10 +390,10 @@ class Supervisor:
                         await self.wamp.close()
                 except Exception:
                     pass
-                
-                # Memory cleanup after disconnect
-                import gc
-                gc.collect()
+                finally:
+                    gc.collect()
+                    await asyncio.sleep_ms(0)
+
 
             except Exception as e:
                 # Make sure we tear down the previous bridge/socket
@@ -395,23 +402,14 @@ class Supervisor:
                         await self.wamp.close()
                 except Exception:
                     pass
-
-                # Memory cleanup after error/disconnect
-                import gc
-                gc.collect()
-
-                await asyncio.sleep(1)
+                finally:
+                    gc.collect()
+                    await asyncio.sleep_ms(0)
 
                 self.state.wamp_ok = False
                 self.state.last_error = "wamp:%r" % (e,)
-                if LOG:
-                    LOG.error("WAMP connect failed: type=%s repr=%r" % (type(e), e))
-                try:
-                    import sys
-                    sys.print_exception(e)
-                except Exception:
-                    pass
-
+                LOG.exception("WAMP connect failed", exc_info=e)
+                gc.collect()
                 self.wamp = None
 
                 # If the underlying error was OSError(16), cool down a bit more
@@ -421,14 +419,18 @@ class Supervisor:
                         eno = e.args[0]
                 except Exception:
                     pass
+                finally:
+                    gc.collect()
 
                 msg = str(e)
                 if "send timeout" in msg:
                     await asyncio.sleep(5)
                 elif eno == 16:
-                    await asyncio.sleep(2)
+                    gc.collect()
+                    await asyncio.sleep(4)
                 else:
                     await asyncio.sleep(backoff)
+                gc.collect()
 
                 backoff = 2 * backoff if backoff < 60 else 60
 
@@ -442,43 +444,51 @@ class Supervisor:
                 self.state.dosing_status = self.dosing_controller.get_dose_status()
             await asyncio.sleep(0.5)  # Update twice per second for precision
 
-    def _recover_last_known_time(self):
-        """Recover time from config file timestamp if RTC is unset (e.g. < 2024)."""
-        try:
-            import os
-            import machine
-            
-            # Check if time is already plausible (e.g. set by NTP or previous soft boot)
-            if time.time() > 1704067200: # 2024-01-01
-                return
-
-            st = os.stat("config.json")
-            mtime = st[8]
-            # If the file timestamp is plausible check
-            if mtime > 1704067200:
-                t = time.localtime(mtime)
-                # RTC.datetime format: (year, month, day, weekday, hour, minute, second, subseconds)
-                # localtime format:    (year, month, mday, hour, minute, second, wday, yday)
-                # wday mapping might vary but 0 is usually irrelevant for internal logic not relying on it explicitly.
-                # Valid weekday is 0-6.
-                machine.RTC().datetime((t[0], t[1], t[2], t[6], t[3], t[4], t[5], 0))
-                if LOG: LOG.warning(f"Time recovered from fs: {t[0]}-{t[1]}-{t[2]} {t[3]}:{t[4]}")
-        except Exception as e:
-            if LOG: LOG.error(f"Failed to recover time from fs: {e}")
+    # def _recover_last_known_time(self):
+    #     """Recover time from config file timestamp if RTC is unset (e.g. < 2024)."""
+    #     try:
+    #         import os
+    #         import machine
+    #
+    #         # Check if time is already plausible (e.g. set by NTP or previous soft boot)
+    #         if time.time() > 1704067200: # 2024-01-01
+    #             return
+    #
+    #         st = os.stat("config.json")
+    #         mtime = st[8]
+    #         # If the file timestamp is plausible check
+    #         if mtime > 1704067200:
+    #             t = time.localtime(mtime)
+    #             # RTC.datetime format: (year, month, day, weekday, hour, minute, second, subseconds)
+    #             # localtime format:    (year, month, mday, hour, minute, second, wday, yday)
+    #             # wday mapping might vary but 0 is usually irrelevant for internal logic not relying on it explicitly.
+    #             # Valid weekday is 0-6.
+    #             machine.RTC().datetime((t[0], t[1], t[2], t[6], t[3], t[4], t[5], 0))
+    #             if LOG: LOG.warning(f"Time recovered from fs: {t[0]}-{t[1]}-{t[2]} {t[3]}:{t[4]}")
+    #     except Exception as e:
+    #         if LOG: LOG.error(f"Failed to recover time from fs: {e}")
 
     async def run(self):
         try:
-            #self._recover_last_known_time()
             LOG.info("Hardware initialized successfully")
-            # Start essential tasks first
-            asyncio.create_task(self.task_wifi())
-            asyncio.create_task(self.task_http())  # <-- start early
-            asyncio.create_task(self.task_ntp())
 
-            # Start WAMP connection with minimal concurrent tasks
+            asyncio.create_task(self.task_reboot_watch())
+            asyncio.create_task(self.task_wifi())
+
+            if self.is_provisioning:
+                LOG.warning("Provisioning mode: AP + provisioning HTTP only")
+                asyncio.create_task(self.task_http())
+
+                # just idle; provisioning endpoint will save config + reboot
+                while True:
+                    await asyncio.sleep(1)
+
+            # normal mode continues:
+            asyncio.create_task(self.task_ntp())
             asyncio.create_task(self.task_wamp())
+
             while not self.state.wamp_ok:
-                await asyncio.sleep(0.2)
+                await asyncio.sleep(1)
 
             # Only after WAMP is connected, start other memory-intensive tasks
             self._init_hw()
@@ -493,8 +503,6 @@ class Supervisor:
 
             loop_count = 0
             while True:
-                self._maybe_reboot()
-                
                 # Log memory usage every 60 seconds to track potential leaks
                 loop_count += 1
                 if loop_count % 240 == 0:  # Every 60 seconds (240 * 0.25s)

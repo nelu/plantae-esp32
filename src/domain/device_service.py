@@ -87,3 +87,4 @@ class DeviceService:
             self.state.switches[:] = self.switches.values[:]
             return ok
         return False
+

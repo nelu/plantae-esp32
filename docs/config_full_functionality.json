@@ -1,7 +1,7 @@
 {
   "wifi": {
-    "ssid": "Voda24",
-    "password": "etajul28"
+    "ssid": "",
+    "password": ""
   },
   "ntp": {
     "host": "pool.ntp.org",
