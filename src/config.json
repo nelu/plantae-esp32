@@ -1,7 +1,7 @@
 {
   "wifi": {
-    "ssid": "",
-    "password": ""
+    "ssid": "Voda24",
+    "password": "etajul28"
   },
   "ntp": {
     "host": "pool.ntp.org",
@@ -58,14 +58,6 @@
       "output": "pwm",
       "duty": 0.5,
       "quantity": 0.25
-    }
-  },
-  "logging": {
-    "level": "DEBUG",
-    "loggers": {
-      "root": "DEBUG",
-      "ws": "DEBUG",
-      "adapters.wamp_bridge": "DEBUG"
     }
   }
 }

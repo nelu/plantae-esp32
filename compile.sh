@@ -12,7 +12,7 @@ rm -rf "$DIST_DIR"
 mkdir -p "$DIST_DIR"
 
 # 2. Copy Assets (main.py, etc)
-ASSETS=("main.py" "boot.py" "config.json" "version.py" "provision.html")
+ASSETS=("boot.py" "config.json" "provision.html")
 for asset in "${ASSETS[@]}"; do
     if [ -f "$SRC_DIR/$asset" ]; then
         cp "$SRC_DIR/$asset" "$DIST_DIR/$asset"
@@ -22,12 +22,13 @@ done
 
 # 3. Files to Compile
 FILES=(
+    "version.py"
+    "main.py"
+
     "protocols/mpautobahn/__init__.py"
     "protocols/mpautobahn/client.py"
     "protocols/mpautobahn/constants.py"
-    "protocols/mpautobahn/url.py"
-    "protocols/mpautobahn/websocket.py"
-    
+
     "adapters/wamp_bridge.py"
     "adapters/config_manager.py"
     "adapters/wifi.py"
@@ -51,6 +52,10 @@ FILES=(
     "drivers/flowsensor/types.py"
     
     "lib/logging.py"
+    "lib/async_websocket_client/__init__.py"
+    "lib/async_websocket_client/ws.py"
+
+
 )
 
 for rel_file in "${FILES[@]}"; do

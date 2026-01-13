@@ -3,6 +3,11 @@ from lib.logging import getLogger
 LOG = getLogger("service")
 
 class DeviceService:
+    __slots__ = (
+        "state","config_mgr","_schedule_reboot",
+        "flow","dosing","switches","pwm",
+        "pwm_override","pwm_override_source",
+    )
     def __init__(self, state, config_mgr, schedule_reboot, 
                  pwm_controller=None, flow_sensor=None, 
                  dosing_controller=None, switchbank=None):

@@ -25,12 +25,12 @@ async def test_ssl_connection():
         from protocols.mpautobahn import AutobahnWS
         
         # Test connection to your SSL endpoint
+
         client = AutobahnWS(
-            host="plantae.robits.org",
-            port=443,
+            url="wss://plantae.robits.org/ws",
             realm="realm1",
-            path="/ws",
-            use_ssl=True
+            ping_interval_s=30,
+            idle_timeout_s=60,
         )
         
         print("Attempting SSL connection...")

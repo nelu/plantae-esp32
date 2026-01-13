@@ -2,7 +2,7 @@
 import time
 import uasyncio as asyncio
 import ujson as json
-from .websocket import WebSocketClient
+from lib.async_websocket_client.ws import AsyncWebsocketClient
 from . import constants as C
 
 
@@ -38,20 +38,15 @@ class _RPCWaiter:
 class AutobahnWS:
     """WAMP client for MicroPython, transport: WebSocket (ws/wss)."""
 
-    def __init__(self, host, port, realm, path="/", use_ssl=False, ping_interval_s=None, idle_timeout_s=None, server_hostname=None):
-        self.host = host
-        self.port = port
+    def __init__(self, url, realm, ping_interval_s=30,idle_timeout_s=60):
+        self.url = url
         self.realm = realm
-        self.path = path or "/"
-        self.use_ssl = use_ssl
-        self.ping_interval_s = ping_interval_s
-        self.idle_timeout_s = idle_timeout_s
-        self.server_hostname = server_hostname
-
-        self._ws = WebSocketClient(host, port, self.path, use_ssl=use_ssl, server_hostname=server_hostname)
+        self._ws = AsyncWebsocketClient()  # Vovaman client
         self._connected = False
         self._session_id = None
         self._next_request_id = 1
+        self.ping_interval_s = ping_interval_s
+        self.idle_timeout_s = idle_timeout_s
 
         self._pending_subscribes = {}
         self._subscriptions = {}
@@ -61,7 +56,7 @@ class AutobahnWS:
         self._pending_publishes = {}
 
         self._recv_task = None
-        self._keepalive_task = None
+        self._ping_task = None
         self._on_join = None
         self._connect_error = None
 
@@ -70,25 +65,37 @@ class AutobahnWS:
         self._session_id = None
         self._connect_error = None
 
-        await self._ws.connect()
+        import gc
+        gc.collect()
+
+        # Force the heap to settle to find the largest contiguous block
+        import gc, time
+        gc.collect()
+        await asyncio.sleep_ms(100)
+        gc.collect()
+        # Connect using the full URL and WAMP subprotocol
+        try:
+            # Vovaman handles SSL internally if the URL starts with wss://
+            await self._ws.handshake(self.url, headers=[(b"Sec-WebSocket-Protocol", b"wamp.2.json")])
+        except Exception as e:
+            self._connect_error = str(e)
+            raise
 
         details = {"roles": {"publisher": {}, "subscriber": {}, "caller": {}, "callee": {}}}
-        await self._ws.send_text(json.dumps([C.HELLO, self.realm, details]))
+        await self.send_text(json.dumps([C.HELLO, self.realm, details]))
 
         if self._recv_task:
-            try:
-                self._recv_task.cancel()
-            except Exception:
-                pass
+            self._recv_task.cancel()
         self._recv_task = asyncio.create_task(self._recv_loop())
 
-        if self.ping_interval_s is not None or self.idle_timeout_s is not None:
-            if self._keepalive_task:
-                try:
-                    self._keepalive_task.cancel()
-                except Exception:
-                    pass
-            self._keepalive_task = asyncio.create_task(self._keepalive_loop())
+
+        # if self.ping_interval_s is not None or self.idle_timeout_s is not None:
+        #     if self._keepalive_task:
+        #         try:
+        #             self._keepalive_task.cancel()
+        #         except Exception:
+        #             pass
+        #     self._keepalive_task = asyncio.create_task(self._keepalive_loop())
 
         t0 = time.ticks_ms()
         while self._session_id is None and self._connect_error is None:
@@ -99,10 +106,17 @@ class AutobahnWS:
         if self._connect_error is not None:
             raise OSError(self._connect_error)
 
+        if self.ping_interval_s:
+            # Cancel old task if it exists
+            if hasattr(self, '_ping_task') and self._ping_task:
+                self._ping_task.cancel()
+            self._ping_task = asyncio.create_task(self._keepalive_loop())
+
         return True
 
     def is_connected(self):
-        return self._connected
+        # Vovaman uses .open to indicate the stream is active
+        return bool(self._ws) and self._connected
 
     def on_join(self, cb):
         self._on_join = cb
@@ -123,15 +137,15 @@ class AutobahnWS:
         if acknowledge:
             waiter = _RPCWaiter()
             self._pending_publishes[request_id] = waiter
-            await self._ws.send_text(json.dumps(msg))
+            await self.send_text(json.dumps(msg))
             return await waiter.wait()
 
-        await self._ws.send_text(json.dumps(msg))
+        await self.send_text(json.dumps(msg))
 
     async def subscribe(self, topic, callback, options=None):
         request_id = self._next_id()
         self._pending_subscribes[request_id] = (topic, callback)
-        await self._ws.send_text(json.dumps([C.SUBSCRIBE, request_id, options or {}, topic]))
+        await self.send_text(json.dumps([C.SUBSCRIBE, request_id, options or {}, topic]))
 
     async def unsubscribe(self, topic):
         pass  # Not implemented to keep footprint small
@@ -139,7 +153,7 @@ class AutobahnWS:
     async def register(self, procedure, callback, options=None):
         request_id = self._next_id()
         self._pending_registers[request_id] = (procedure, callback)
-        await self._ws.send_text(json.dumps([C.REGISTER, request_id, options or {}, procedure]))
+        await self.send_text(json.dumps([C.REGISTER, request_id, options or {}, procedure]))
 
     async def call(self, procedure, *args):
         request_id = self._next_id()
@@ -149,25 +163,26 @@ class AutobahnWS:
         msg = [C.CALL, request_id, {}, procedure]
         if args:
             msg.append(list(args))
-        await self._ws.send_text(json.dumps(msg))
+        await self.send_text(json.dumps(msg))
         return await waiter.wait()
 
     async def close(self):
         try:
             if self._connected:
-                await self._ws.send_text(json.dumps([C.GOODBYE, {}, "wamp.close.normal"]))
+                await self.send_text(json.dumps([C.GOODBYE, {}, "wamp.close.normal"]))
         except Exception:
             pass
 
         self._connected = False
+
+        if self._ping_task:
+            self._ping_task.cancel()
+            self._ping_task = None
         if self._recv_task:
             self._recv_task.cancel()
             self._recv_task = None
-        if self._keepalive_task:
-            self._keepalive_task.cancel()
-            self._keepalive_task = None
-
-        await self._ws.close()
+        if self._ws:
+            await self._ws.open(False)  # Close Vovaman client
         
         # Clear all state to free memory
         self._pending_subscribes.clear()
@@ -187,67 +202,78 @@ class AutobahnWS:
     async def _recv_loop(self):
         try:
             while True:
-                if self._session_id is not None and not self._connected:
-                    break
-                try:
-                    text = await self._ws.recv_text()
-                except OSError as e:
-                    self._connected = False
-                    if not self._session_id:
-                        self._connect_error = "WebSocket connection failed: %s" % str(e)
-                    break
-                except Exception as e:
-                    self._connected = False
-                    if not self._session_id:
-                        self._connect_error = "WebSocket error: %s" % str(e)
+                # 1. Check connection state
+                if not self._ws or not await self._ws.open():
                     break
 
-                if not text:
-                    continue
+                # 2. Vovaman's high-level recv()
+                # returns string for text frames, bytes for binary
+                text = await self._ws.recv()
+
+                if text is None:
+                    # LOG.info("WAMP: Connection closed (recv returned None)")
+                    break
+
                 try:
+                    # Parse the JSON string into WAMP message
                     msg = json.loads(text)
-                except Exception:
+                    await self._handle_wamp_message(msg)
+                except Exception as e:
+                    print("WAMP: JSON/Processing error: %s" % e)
+                    # LOG.error("WAMP: JSON/Processing error: %s" % e)
                     continue
 
-                await self._handle_wamp_message(msg)
-        except asyncio.CancelledError:
-            pass
+        except Exception as e:
+            print("WAMP: Recv loop exception: %s" % e)
+            #LOG.error("WAMP: Recv loop exception: %s" % e)
         finally:
             self._connected = False
+            self._session_id = None
+            #LOG.info("WAMP: Recv loop stopped")
+            print("WAMP: Recv loop stopped")
+
+    async def send_text(self, data):
+        """Helper to send WAMP JSON strings"""
+        if not self._ws or not await self._ws.open():
+            return
+        await self._ws.send(data)
+
+    async def send_ping(self, data=b''):
+        """Send a low-level WebSocket PING frame."""
+        if self._ws and await self._ws.open():
+            try:
+                # Based on your ws.py: write_frame(self, opcode, data=b'')
+                # OP_PING is 0x09
+                self._ws.write_frame(0x09, data)
+                # LOG.debug("WAMP: WebSocket PING sent")
+            except Exception as e:
+                print("WAMP: Failed to send PING: %s" % e)
+                self._connected = False
 
     async def _keepalive_loop(self):
-        ping_ms = int(self.ping_interval_s * 1000) if self.ping_interval_s else 25000
-        idle_ms = int(self.idle_timeout_s * 1000) if self.idle_timeout_s else 180000
-
+        """Background task to send periodic PING frames."""
+        print("WAMP: Keepalive loop started (interval: %ss)" % self.ping_interval_s)
         try:
-            # Wait for connection to be established before starting keepalive
-            while not self._connected and self._connect_error is None:
-                await asyncio.sleep_ms(50)
-            
             while self._connected:
-                await asyncio.sleep_ms(ping_ms)
+                await asyncio.sleep(self.ping_interval_s)
+
                 if not self._connected:
                     break
 
-                if self.idle_timeout_s and self._ws._last_activity_ms:
-                    if time.ticks_diff(time.ticks_ms(), self._ws._last_activity_ms) > idle_ms:
-                        self._connected = False
-                        break
-
-                try:
-                    await self._ws.send_ping()
-                except Exception:
+                # Verify connection is still open before pinging
+                if not await self._ws.open():
+                    print("WAMP: Keepalive detected closed socket")
                     self._connected = False
                     break
+
+                await self.send_ping()
+
         except asyncio.CancelledError:
             pass
+        except Exception as e:
+            print("WAMP: Keepalive loop error: %s" % e)
         finally:
-            # Only close if we were connected and now disconnected (not during initial connect)
-            if self._session_id and not self._connected:
-                try:
-                    await self._ws.close()
-                except Exception:
-                    pass
+            print("WAMP: Keepalive loop stopped")
 
     async def _handle_wamp_message(self, msg):
         if not isinstance(msg, list) or not msg:
@@ -315,12 +341,12 @@ class AutobahnWS:
                 except Exception as exc:
                     # Fix: 4th item is Error URI (string), 5th is Args (list)
                     err_msg = [C.ERROR, C.INVOCATION, request_id, {}, "wamp.error.runtime_error", [str(exc)]]
-                    await self._ws.send_text(json.dumps(err_msg))
+                    await self.send_text(json.dumps(err_msg))
                     return
                 # If result was None or a value, we just use it directly.
 
             resp = [C.YIELD, request_id, {}] if result is None else [C.YIELD, request_id, {}, [result]]
-            await self._ws.send_text(json.dumps(resp))
+            await self.send_text(json.dumps(resp))
 
         elif code == C.RESULT:
             req_id = msg[1]

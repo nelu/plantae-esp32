@@ -1,81 +1,80 @@
 import uasyncio as asyncio
 import time
-from machine import I2C, Pin, reset
-from app.device_id import get_device_id
-
-from lib.logging import Logger
-
-def configure_logging(cfg):
-    """Configure logging from config dict (console only)."""
-    from lib.logging import (
-        basicConfig, getLogger, Formatter,
-        DEBUG, INFO, WARNING, ERROR, CRITICAL
-    )
-
-    def format_time(self, datefmt, record):
-        # Use strftime if present
-        if hasattr(time, "strftime"):
-            return time.strftime(datefmt, time.localtime(record.ct))
-
-        # Simple fallback for common patterns like "%H:%M:%S"
-        t = time.localtime(record.ct)  # (Y, m, d, H, M, S, ...)
-        Y, m, d, H, M, S = t[0], t[1], t[2], t[3], t[4], t[5]
-        s = datefmt or "%Y-%m-%d %H:%M:%S"
-        return (s.replace("%Y", f"{Y:04d}")
-                .replace("%m", f"{m:02d}")
-                .replace("%d", f"{d:02d}")
-                .replace("%H", f"{H:02d}")
-                .replace("%M", f"{M:02d}")
-                .replace("%S", f"{S:02d}"))
-
-    Formatter.formatTime = format_time
-    log_cfg = cfg.get("logging")
-
-    if not log_cfg:
-        print("Using default logging")
-        return getLogger()
-
-    level_map = {
-        "DEBUG": DEBUG,
-        "INFO": INFO,
-        "WARNING": WARNING,
-        "ERROR": ERROR,
-        "CRITICAL": CRITICAL,
-    }
-
-    # Base/root level (also used for handler threshold)
-    base_level = level_map.get(log_cfg.get("level", "WARNING"), WARNING)
 
 
-    # basicConfig sets up root logger + one StreamHandler + Formatter
-    # force=True prevents duplicated handlers if this runs multiple times
-    basicConfig(level=base_level,
-                format="%(asctime)s %(levelname)s:%(name)s:%(message)s",
-                datefmt="%H:%M:%S",
-                force=True)
+# def configure_logging(cfg):
+#     """Configure logging from config dict (console only)."""
+#     from lib.logging import (
+#         basicConfig, getLogger, Formatter,
+#         DEBUG, INFO, WARNING, ERROR, CRITICAL
+#     )
+#
+#     def format_time(self, datefmt, record):
+#         # Use strftime if present
+#         if hasattr(time, "strftime"):
+#             return time.strftime(datefmt, time.localtime(record.ct))
+#
+#         # Simple fallback for common patterns like "%H:%M:%S"
+#         t = time.localtime(record.ct)  # (Y, m, d, H, M, S, ...)
+#         Y, m, d, H, M, S = t[0], t[1], t[2], t[3], t[4], t[5]
+#         s = datefmt or "%Y-%m-%d %H:%M:%S"
+#         return (s.replace("%Y", f"{Y:04d}")
+#                 .replace("%m", f"{m:02d}")
+#                 .replace("%d", f"{d:02d}")
+#                 .replace("%H", f"{H:02d}")
+#                 .replace("%M", f"{M:02d}")
+#                 .replace("%S", f"{S:02d}"))
+#
+#     Formatter.formatTime = format_time
+#     log_cfg = cfg.get("logging")
+#
+#     if not log_cfg:
+#         print("Using default logging")
+#         return getLogger()
+#
+#     level_map = {
+#         "DEBUG": DEBUG,
+#         "INFO": INFO,
+#         "WARNING": WARNING,
+#         "ERROR": ERROR,
+#         "CRITICAL": CRITICAL,
+#     }
+#
+#     # Base/root level (also used for handler threshold)
+#     base_level = level_map.get(log_cfg.get("level", "WARNING"), WARNING)
+#
+#
+#     # basicConfig sets up root logger + one StreamHandler + Formatter
+#     # force=True prevents duplicated handlers if this runs multiple times
+#     basicConfig(level=base_level,
+#                 format="%(asctime)s %(levelname)s:%(name)s:%(message)s",
+#                 datefmt="%H:%M:%S",
+#                 force=True)
+#
+#     root = getLogger()
+#
+#     # Per-logger overrides
+#     for logger_name, level_str in (log_cfg.get("loggers") or {}).items():
+#         lvl = level_map.get(level_str, base_level)
+#
+#         if logger_name == "root":
+#             root.setLevel(lvl)
+#             for h in root.handlers:
+#                 h.setLevel(lvl)
+#         else:
+#             getLogger(logger_name).setLevel(lvl)
+#
+#     root.info("Logging configured from config file")
+#     return root
 
-    root = getLogger()
-
-    # Per-logger overrides
-    for logger_name, level_str in (log_cfg.get("loggers") or {}).items():
-        lvl = level_map.get(level_str, base_level)
-
-        if logger_name == "root":
-            root.setLevel(lvl)
-            for h in root.handlers:
-                h.setLevel(lvl)
-        else:
-            getLogger(logger_name).setLevel(lvl)
-
-    root.info("Logging configured from config file")
-    return root
-
-LOG: Logger | None = None
+LOG = None
 
 class Supervisor:
     def __init__(self, config_path="config.json"):
         from domain.state import DeviceState
         from adapters.config_manager import ConfigManager
+        from lib.logging import getLogger, basicConfig, DEBUG
+        from app.device_id import get_device_id
 
         import gc
         gc.collect()
@@ -83,12 +82,13 @@ class Supervisor:
         self.cfg_mgr = ConfigManager(config_path)
         self.cfg = self.cfg_mgr.load()
         
-        # Clean up after JSON parsing
-        gc.collect()
+
         
         # Configure logging from config file
         global LOG
-        LOG = configure_logging(self.cfg)
+        # LOG = configure_logging(self.cfg)
+        basicConfig(level=DEBUG)
+        LOG = getLogger()
 
         self.device_id = get_device_id(self.cfg)
         self.state = DeviceState(self.device_id)
@@ -114,12 +114,15 @@ class Supervisor:
         self.http_api = None
         
         # Initialize centralized device service (empty initially)
-        from domain.device_service import DeviceService
-        self.service = DeviceService(
-            self.state, 
-            self.cfg_mgr, 
-            self.schedule_reboot
-        )
+        self.service = None
+        # from domain.device_service import DeviceService
+        # self.service = DeviceService(
+        #     self.state,
+        #     self.cfg_mgr,
+        #     self.schedule_reboot
+        # )
+        # Clean up after JSON parsing
+        gc.collect()
 
     async def _announce_reboot(self):
         if self.wamp:
@@ -138,6 +141,7 @@ class Supervisor:
 
     def _maybe_reboot(self):
         if self._reboot_at and time.ticks_diff(time.ticks_ms(), self._reboot_at) >= 0:
+            from machine import reset
             reset()
 
     def _local_minutes(self):
@@ -157,6 +161,7 @@ class Supervisor:
 
     def _init_hw(self):
         from drivers.pca9685 import PCA9685
+        from machine import I2C, Pin
 
         from drivers.pwm_out import PwmOut
         from drivers.flowsensor.flowsensor import FlowSensor
@@ -292,6 +297,8 @@ class Supervisor:
             await asyncio.sleep(1)
 
     async def task_pwm_test_btn(self):
+        from machine import Pin
+
         btn_cfg = self.cfg.get("inputs", {}).get("pwm_test_btn", {})
         pin_num = btn_cfg.get("pin")
         if not pin_num:
@@ -371,7 +378,9 @@ class Supervisor:
                 from adapters.wamp_bridge import WampBridge
                 LOG.info("WAMP connect attempt. Free: %d", gc.mem_free())
                 gc.collect()
-                self.wamp = WampBridge(self.cfg, self.state, self.service)
+#                self.wamp = WampBridge(self.cfg, self.state, self.service)
+                self.wamp = WampBridge(self.cfg, self.state, None)
+
 
                 gc.collect()
                 await asyncio.sleep_ms(0)
@@ -444,29 +453,6 @@ class Supervisor:
                 self.state.dosing_status = self.dosing_controller.get_dose_status()
             await asyncio.sleep(0.5)  # Update twice per second for precision
 
-    # def _recover_last_known_time(self):
-    #     """Recover time from config file timestamp if RTC is unset (e.g. < 2024)."""
-    #     try:
-    #         import os
-    #         import machine
-    #
-    #         # Check if time is already plausible (e.g. set by NTP or previous soft boot)
-    #         if time.time() > 1704067200: # 2024-01-01
-    #             return
-    #
-    #         st = os.stat("config.json")
-    #         mtime = st[8]
-    #         # If the file timestamp is plausible check
-    #         if mtime > 1704067200:
-    #             t = time.localtime(mtime)
-    #             # RTC.datetime format: (year, month, day, weekday, hour, minute, second, subseconds)
-    #             # localtime format:    (year, month, mday, hour, minute, second, wday, yday)
-    #             # wday mapping might vary but 0 is usually irrelevant for internal logic not relying on it explicitly.
-    #             # Valid weekday is 0-6.
-    #             machine.RTC().datetime((t[0], t[1], t[2], t[6], t[3], t[4], t[5], 0))
-    #             if LOG: LOG.warning(f"Time recovered from fs: {t[0]}-{t[1]}-{t[2]} {t[3]}:{t[4]}")
-    #     except Exception as e:
-    #         if LOG: LOG.error(f"Failed to recover time from fs: {e}")
 
     async def run(self):
         try:
@@ -490,9 +476,19 @@ class Supervisor:
             while not self.state.wamp_ok:
                 await asyncio.sleep(1)
 
-            # Only after WAMP is connected, start other memory-intensive tasks
+            if self.service is None:
+                from domain.device_service import DeviceService
+                self.service = DeviceService(
+                    self.state,
+                    self.cfg_mgr,
+                    self.schedule_reboot
+                )
+
+            if self.wamp:
+                self.wamp.service = self.service
+                # Only after WAMP is connected, start other memory-intensive tasks
             self._init_hw()
-            
+
             asyncio.create_task(self.task_flow())
             asyncio.create_task(self.task_pwm_schedule())
             asyncio.create_task(self.task_pwm_test_btn())

@@ -1,10 +1,9 @@
 import time
-from protocols.mpautobahn import AutobahnWS, parse_ws_url
 from lib.logging import getLogger
 from version import VERSION, BUILD_DATE
 
 
-LOG = getLogger(__name__)
+LOG = getLogger()
 
 class WampBridge:
     def __init__(self, cfg, state, service):
@@ -42,11 +41,11 @@ class WampBridge:
             LOG.warning("not available self.client: %s", self.client)
             return False
 
-        connected = bool(self.client.is_connected())
+        connected =  bool(self.client.is_connected())
         
         # Add debug logging when connection state changes
         if self._last_alive_state != connected:
-            LOG.info("connection state changed: %s -> %s", self._last_alive_state, connected)
+            LOG.info("is_alive: state change: %s -> %s", self._last_alive_state, connected)
             pass
 
         self._last_alive_state = connected
@@ -55,6 +54,7 @@ class WampBridge:
 
     async def connect(self):
         import gc
+        from protocols.mpautobahn import AutobahnWS
 
         gc.collect()
 
@@ -64,26 +64,20 @@ class WampBridge:
 
         self.client = None
         self.state.wamp_ok = False
+        LOG.info("connecting: url=%s realm=%s" % (url, realm))
+        #LOG.info("connected: %s (%s)", url, realm)
 
         # Basic gc before connection
         gc.collect()
 
-        # Parse ws:// / wss:// URL without urllib (reuse helper from ws_async)
-        scheme, host, port, path = parse_ws_url(url)
-        use_ssl = (scheme == "wss")
-
-
         # AutobahnWS handles both WebSocket and WAMP session handshake
         # Pass keepalive config for resilience over public internet
+        # Simple debug logging
         self.client = AutobahnWS(
-            host=host,
-            port=port,
+            url=url,
             realm=realm,
-            path=path,
-            use_ssl=use_ssl,
             ping_interval_s=ka.get("ping_interval_s"),
             idle_timeout_s=ka.get("idle_timeout_s"),
-            server_hostname=None,
         )
         # Check if we have a pre-resolved host for SNI (Disabled for standard DNS test)
         # server_hostname = self.cfg["wamp"].get("original_host")
@@ -92,8 +86,7 @@ class WampBridge:
         # Set up the on_join callback to handle subscriptions/registrations
         # self.client.on_join(self._on_wamp_join)
 
-        # Simple debug logging
-        LOG.info("CONN: url=%s realm=%s", url, realm)
+
 
         # await self.client.connect()
         # await asyncio.sleep_ms(100)
@@ -113,7 +106,6 @@ class WampBridge:
 
         self.state.wamp_ok = True
         self.state.last_error = None
-        LOG.info("connected: %s (%s)" % (url, realm))
 
     async def _on_wamp_join(self):
         """Called when WAMP session is joined - set up subscriptions and registrations"""
@@ -135,13 +127,12 @@ class WampBridge:
                 await self.client.register(self._addr_topic("reset", suf), self.rpc_reset)
 
             await self.client.subscribe(self._topic("announce.master"), self.on_master)
-            LOG.info("before announce.online")
 
             await self.publish_announce("announce.online")
 
-            LOG.info("Setup completed")
+            LOG.info("_on_join: completed")
         except Exception as e:
-            LOG.error("on_join/setup failed: %r", e)
+            LOG.error("_on_join: failed")
             raise
 
 
@@ -207,6 +198,8 @@ class WampBridge:
         await self.publish_announce("announce.online")
 
     async def rpc_control(self, args, kwargs, details):
+        if not self.service:
+            return {"error": "service_not_initialized"}
         if "all" in kwargs:
             return self.service.set_all_switches(bool(kwargs["all"]))
         if "switch" in kwargs:
@@ -220,12 +213,16 @@ class WampBridge:
         return False
 
     async def rpc_calibrate(self, args, kwargs, details):
+        if not self.service:
+            return {"error": "service_not_initialized"}
         if kwargs.get("type") == "flow" and "calibration" in kwargs:
             cal = int(kwargs["calibration"])
             return self.service.patch_config({"flow": {"calibration": cal}})
         return False
 
     async def rpc_dose(self, args, kwargs, details):
+        if not self.service:
+            return {"error": "service_not_initialized"}
         """Handle dosing RPC calls"""
         action = kwargs.get("action", "status")
         
@@ -251,6 +248,8 @@ class WampBridge:
             return {"error": "unknown_action", "action": action}
 
     async def rpc_output(self, args, kwargs, details):
+        if not self.service:
+            return {"error": "service_not_initialized"}
         """Handle output control RPC calls"""
         name = kwargs.get("name", "pwm")
         duty = kwargs.get("duty", 1.0)
@@ -272,13 +271,19 @@ class WampBridge:
 
 
     async def rpc_status(self, args, kwargs, details):
+        if not self.service:
+            return {"error": "service_not_initialized"}
         """Get device status including dosing information"""
         return self.service.get_status()
 
     async def rpc_reset(self, args, kwargs, details):
+        if not self.service:
+            return {"error": "service_not_initialized"}
         return self.service.reset_counters()
 
     async def rpc_reboot(self, args, kwargs, details):
+        if not self.service:
+            return {"error": "service_not_initialized"}
         t = 1
         if args:
             try: t = int(args[0])
