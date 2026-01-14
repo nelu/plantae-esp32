@@ -1,5 +1,11 @@
+import gc
 import time
+
+import uasyncio as asyncio
+
 from lib.logging import LOG
+from protocols.mpautobahn import AutobahnWS
+
 
 class WampBridge:
     def __init__(self, cfg, state, service):
@@ -9,57 +15,10 @@ class WampBridge:
         self.client = None
         self._last_alive_state = False
 
-
-    def _pfx(self):
-        return self.cfg["wamp"].get("prefix", "org.robits.plantae.")
-
-    def _topic(self, name):
-        return self._pfx() + name
-
-    def _addr_suffixes(self):
-        out = [self.state.device_id]
-        # if self.cfg["wamp"].get("legacy_by_ip", True):
-        #     out.append(self.state.ip)
-        seen=set(); uniq=[]
-        for x in out:
-            if x and x not in seen:
-                uniq.append(x); seen.add(x)
-        return uniq
-
-    def _addr_topic(self, base_name, suffix):
-        return self._pfx() + ("%s.%s" % (base_name, suffix))
-
-    def is_alive(self):
-        """
-        Connectivity check for the current WAMP client (AutobahnWS).
-        """
-        if not self.client:
-            LOG.warning("not available self.client: %s", self.client)
-            return False
-
-        connected =  bool(self.client.is_connected())
-        
-        # Add debug logging when connection state changes
-        if self._last_alive_state != connected:
-            LOG.info("is_alive: state change: %s -> %s", self._last_alive_state, connected)
-            pass
-
-        self._last_alive_state = connected
-        
-        return connected
-
-    async def connect(self):
-        import gc
-        from protocols.mpautobahn import AutobahnWS
-
-        gc.collect()
-
         url = self.cfg["wamp"]["url"]
         realm = self.cfg["wamp"].get("realm", "realm1")
         ka = self.cfg.get("wamp", {}).get("keepalive", {})
 
-        self.client = None
-        self.state.wamp_ok = False
         LOG.info("connect: url=%s realm=%s", url, realm)
 
         # Basic gc before connection
@@ -74,30 +33,76 @@ class WampBridge:
             ping_interval_s=ka.get("ping_interval_s"),
             idle_timeout_s=ka.get("idle_timeout_s"),
         )
+
+    def _pfx(self):
+        return self.cfg["wamp"].get("prefix", "org.robits.plantae.")
+
+    def _topic(self, name):
+        return self._pfx() + name
+
+    def _addr_suffixes(self):
+        out = [self.state.device_id]
+        # if self.cfg["wamp"].get("legacy_by_ip", True):
+        #     out.append(self.state.ip)
+        seen = set();
+        uniq = []
+        for x in out:
+            if x and x not in seen:
+                uniq.append(x);
+                seen.add(x)
+        return uniq
+
+    def _addr_topic(self, base_name, suffix):
+        return self._pfx() + ("%s.%s" % (base_name, suffix))
+
+    def is_alive(self):
+        """
+        Connectivity check for the current WAMP client (AutobahnWS).
+        """
+
+        connected = bool(self.client.is_connected())
+
+        # Add debug logging when connection state changes
+        if self._last_alive_state != connected:
+            LOG.info("is_alive: state change: %s -> %s", self._last_alive_state, connected)
+            pass
+
+        self._last_alive_state = connected
+
+        return connected
+
+    async def connect(self):
+        self.state.wamp_ok = False
+
+        gc.collect()
+
         # Check if we have a pre-resolved host for SNI (Disabled for standard DNS test)
         # server_hostname = self.cfg["wamp"].get("original_host")
 
-
         # Set up the on_join callback to handle subscriptions/registrations
         # self.client.on_join(self._on_wamp_join)
-
-
 
         # await self.client.connect()
         # await asyncio.sleep_ms(100)
 
         try:
             await self.client.connect()
+            gc.collect()
             await self._on_wamp_join()  # do setup now, no Event/Flag needed
+            gc.collect()
 
         except Exception as e:
             # make sure we drop sockets/refs so GC can reclaim things
             self.state.last_error = e
             try:
                 await self.close()
+                gc.collect()
             except Exception:
                 pass
+            finally:
+                gc.collect()
             raise
+
 
         self.state.wamp_ok = True
         self.state.last_error = None
@@ -126,14 +131,15 @@ class WampBridge:
             await self.publish_announce("announce.online")
 
             LOG.info("_on_join: completed")
+            gc.collect()
+
         except Exception as e:
             LOG.error("_on_join: failed")
+            gc.collect()
+
             raise
 
-
     async def close(self):
-        import gc
-        import uasyncio as asyncio
 
         if self.client:
             try:
@@ -162,10 +168,10 @@ class WampBridge:
                    "ts": time.time(),
                    "config": self.cfg
                    }
-        
+
         options = {}
         if exclude_me is not None:
-             options["exclude_me"] = exclude_me
+            options["exclude_me"] = exclude_me
 
         pub_id = await self.client.publish(self._topic(topic_name), kwargs=payload, acknowledge=True, options=options)
         # LOG.debug("Announce published: %s pub_id=%s", topic_name, pub_id)
@@ -214,25 +220,25 @@ class WampBridge:
     async def rpc_dose(self, args, kwargs, details):
         """Handle dosing RPC calls"""
         action = kwargs.get("action", "status")
-        
+
         if action == "start":
             quantity = kwargs.get("quantity", 0.0)
             if quantity <= 0:
                 return {"error": "invalid_quantity", "quantity": quantity}
-            
+
             success = await self.service.start_dose(quantity, is_manual=True)
             if success:
                 return {"status": "started", "quantity": quantity}
             else:
                 return {"error": "failed_to_start"}
-                
+
         elif action == "stop":
             success = self.service.stop_dose()
             return {"status": "stopped" if success else "not_active"}
-            
+
         elif action == "status":
             return self.service.get_dose_status()
-            
+
         else:
             return {"error": "unknown_action", "action": action}
 
@@ -241,7 +247,7 @@ class WampBridge:
         name = kwargs.get("name", "pwm")
         duty = kwargs.get("duty", 1.0)
         action = kwargs.get("action")
-        
+
         if name == "pwm":
             if action == "release":
                 self.service.set_pwm_manual(0, override=False, source="rpc")
@@ -249,13 +255,12 @@ class WampBridge:
             else:
                 self.service.set_pwm_manual(duty, override=True, source="rpc")
                 return {"status": "set", "duty": duty}
-            
+
         elif name == "pca9685":
             return {"status": "pca9685_not_implemented"}
-            
+
         else:
             return {"error": "unknown_output", "name": name}
-
 
     async def rpc_status(self, args, kwargs, details):
         """Get device status including dosing information"""
@@ -267,10 +272,14 @@ class WampBridge:
     async def rpc_reboot(self, args, kwargs, details):
         t = 1
         if args:
-            try: t = int(args[0])
-            except Exception: pass
+            try:
+                t = int(args[0])
+            except Exception:
+                pass
         if "timeout" in kwargs:
-            try: t = int(kwargs["timeout"])
-            except Exception: pass
-        
+            try:
+                t = int(kwargs["timeout"])
+            except Exception:
+                pass
+
         return self.service.reboot(t)

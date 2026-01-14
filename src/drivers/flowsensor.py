@@ -21,7 +21,7 @@ class FlowSensor:
         self._t0=time.ticks_ms()
         self._pin=None
 
-    def begin(self, pullup=True, trigger=Pin.IRQ_RISING):
+    def begin(self, pullup=True, trigger=Pin.IRQ_FALLING):
         if pullup:
             self._pin=Pin(self._pin_num, Pin.IN)
         else:

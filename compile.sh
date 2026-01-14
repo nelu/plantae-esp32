@@ -46,9 +46,8 @@ FILES=(
     
     "drivers/pca9685.py"
     "drivers/pwm_out.py"
-    "drivers/flowsensor/__init__.py"
-    "drivers/flowsensor/flowsensor.py"
-    "drivers/flowsensor/types.py"
+    "drivers/flowsensor.py"
+
     
     "lib/logging.py"
     "lib/async_websocket_client/__init__.py"

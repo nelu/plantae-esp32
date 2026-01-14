@@ -1,6 +1,7 @@
 import time
 
 import uasyncio as asyncio
+
 from lib.logging import LOG
 
 
@@ -86,8 +87,7 @@ class Supervisor:
         # from domain.controllers import SwitchBank
 
         from drivers.pwm_out import PwmOut
-        from drivers.flowsensor.flowsensor import FlowSensor
-        from drivers.flowsensor import types as flowtypes
+        from drivers.flowsensor import FlowSensor, flowtypes
         from domain.dosing import DosingController
 
         pwm_cfg = self.cfg["outputs"]["pwm"]
@@ -103,16 +103,14 @@ class Supervisor:
         #     self.switchbank = SwitchBank(pca, channels=int(pca_cfg.get("channels",16)))
 
         fcfg = self.cfg["flow"]
-        ppl = getattr(flowtypes, fcfg.get("type", "YFS401"), flowtypes.YFS401)
-        # self.flow = FlowSensor(ppl, fcfg.get("pin",14))
-        # self.flow.begin(pullup=bool(fcfg.get("pullup_external", True)))
+        ppl = flowtypes.get(fcfg.get("type", "YFS401"))
         self.service.pwm = PwmOut(pwm_cfg["pin"], pwm_cfg.get("freq", 1000), pwm_cfg.get("active_low", False))
 
         # Initialize dosing controller
         # self.dosing_controller =DosingController(self.service.flow, self.service.pwm, self.cfg)
 
         # Update service with initialized components
-        self.service.flow = FlowSensor(ppl, fcfg.get("pin", 14))
+        self.service.flow = FlowSensor(ppl, fcfg.get("pin", 34))
         self.service.flow.begin(pullup=bool(fcfg.get("pullup_external", True)))
         # refactor this instantiation into service
         self.service.dosing = DosingController(self.service.flow, self.service.pwm, self.cfg)
@@ -441,6 +439,7 @@ class Supervisor:
             import sys
             sys.print_exception(e)
             raise
+
 
 def start():
     print("BOOT: Waiting 5s for network cleanup...")
