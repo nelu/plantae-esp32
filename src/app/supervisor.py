@@ -1,3 +1,4 @@
+import gc
 import time
 
 import uasyncio as asyncio
@@ -11,6 +12,7 @@ class Supervisor:
         from adapters.config_manager import ConfigManager
         from app.device_id import get_device_id
         from domain.device_service import DeviceService
+        from adapters.wamp_bridge import WampBridge
 
         self.cfg_mgr = ConfigManager(config_path)
         self.cfg = self.cfg_mgr.load()
@@ -34,7 +36,7 @@ class Supervisor:
         # self.dosing_controller = None
 
         self._reboot_at = None
-        self.wamp = None
+        # self.wamp = None
         self.http_server = None
         self.http_api = None
 
@@ -44,8 +46,8 @@ class Supervisor:
             self.cfg_mgr,
             self.schedule_reboot
         )
+        self.wamp = WampBridge(self.cfg, self.state, self.service)
 
-        import gc
         gc.collect()
 
     async def _announce_reboot(self):
@@ -274,8 +276,7 @@ class Supervisor:
             pass
 
     async def task_wamp(self):
-        if LOG: LOG.info("task_wamp: started")
-        import gc
+        LOG.info("task_wamp: started")
 
         backoff = 1
         ntp_quiet_done = False
@@ -296,50 +297,44 @@ class Supervisor:
                 await asyncio.sleep(3)
 
             try:
-                from adapters.wamp_bridge import WampBridge
                 LOG.info("task_wamp: connect. Free: %d", gc.mem_free())
                 gc.collect()
-                self.wamp = WampBridge(self.cfg, self.state, self.service)
+                # self.wamp = WampBridge(self.cfg, self.state, self.service)
                 #                self.wamp = WampBridge(self.cfg, self.state, None)
 
-                gc.collect()
                 await asyncio.sleep_ms(0)
 
                 await self.wamp.connect()
                 backoff = 1
 
-                while self.wamp and self.wamp.is_alive():
+                while self.wamp.is_alive():
                     # await self.wamp.publish_sense()
                     await self.wamp.publish_status()
                     await asyncio.sleep(1)
 
                 # Connection loop ended; close cleanly before reconnecting
-                try:
-                    if self.wamp:
-                        await self.wamp.close()
-                except Exception:
-                    pass
-                finally:
-                    gc.collect()
-                    await asyncio.sleep_ms(0)
+                await self.wamp.close()
+
+                gc.collect()
+                await asyncio.sleep_ms(0)
 
 
             except Exception as e:
+
+                self.state.wamp_ok = False
+                self.state.last_error = (e,)
+                LOG.error("task_wamp: %r", e)
+
                 # Make sure we tear down the previous bridge/socket
                 try:
-                    if self.wamp:
-                        await self.wamp.close()
-                except Exception:
-                    pass
+                    await self.wamp.close()
+                except Exception as e:
+                    LOG.error('task_wamp: wamp close error - %r', e)
                 finally:
                     gc.collect()
                     await asyncio.sleep_ms(0)
 
-                self.state.wamp_ok = False
-                self.state.last_error = "wamp:%r" % (e,)
-                LOG.error(self.state.last_error)
                 gc.collect()
-                self.wamp = None
 
                 # If the underlying error was OSError(16), cool down a bit more
                 eno = None

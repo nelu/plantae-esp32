@@ -12,14 +12,12 @@ class WampBridge:
         self.cfg = cfg
         self.state = state
         self.service = service
-        self.client = None
         self._last_alive_state = False
 
         url = self.cfg["wamp"]["url"]
         realm = self.cfg["wamp"].get("realm", "realm1")
         ka = self.cfg.get("wamp", {}).get("keepalive", {})
-
-        LOG.info("connect: url=%s realm=%s", url, realm)
+        hostname = self.cfg["wamp"]["sni_host"]
 
         # Basic gc before connection
         gc.collect()
@@ -30,6 +28,7 @@ class WampBridge:
         self.client = AutobahnWS(
             url=url,
             realm=realm,
+            sni_host=hostname,
             ping_interval_s=ka.get("ping_interval_s"),
             idle_timeout_s=ka.get("idle_timeout_s"),
         )
@@ -73,6 +72,7 @@ class WampBridge:
 
     async def connect(self):
         self.state.wamp_ok = False
+        LOG.info("connect: url=%s realm=%s", self.client.url, self.client.realm)
 
         gc.collect()
 
@@ -97,6 +97,7 @@ class WampBridge:
             try:
                 await self.close()
                 gc.collect()
+                await asyncio.sleep(5)  # <-- add this
             except Exception:
                 pass
             finally:
@@ -147,7 +148,6 @@ class WampBridge:
             except Exception:
                 pass
 
-        self.client = None
         self.state.wamp_ok = False
 
         # give uasyncio a chance to run socket close callbacks
@@ -166,14 +166,14 @@ class WampBridge:
                    "ver": self.state.version,
                    "build": self.state.build,
                    "ts": time.time(),
-                   "config": self.cfg
+                   "config": {} #self.cfg
                    }
 
         options = {}
         if exclude_me is not None:
             options["exclude_me"] = exclude_me
 
-        pub_id = await self.client.publish(self._topic(topic_name), kwargs=payload, acknowledge=True, options=options)
+        pub_id = await self.client.publish(self._topic(topic_name), kwargs=payload, acknowledge=False, options=options)
         # LOG.debug("Announce published: %s pub_id=%s", topic_name, pub_id)
 
     async def publish_switch(self, idx, on):

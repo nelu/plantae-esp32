@@ -1,8 +1,12 @@
 """WAMP client for MicroPython using WebSocket transport."""
+import gc
 import time
+
 import uasyncio as asyncio
 import ujson as json
+
 from lib.async_websocket_client.ws import AsyncWebsocketClient
+from lib.logging import LOG
 from . import constants as C
 
 
@@ -34,13 +38,13 @@ class _RPCWaiter:
         self._flag.set()
 
 
-
 class AutobahnWS:
     """WAMP client for MicroPython, transport: WebSocket (ws/wss)."""
 
-    def __init__(self, url, realm, ping_interval_s=30,idle_timeout_s=60):
+    def __init__(self, url, realm, ping_interval_s=30, idle_timeout_s=60, sni_host=None):
         self.url = url
         self.realm = realm
+        self.sni_host = sni_host
         self._ws = AsyncWebsocketClient()  # Vovaman client
         self._connected = False
         self._session_id = None
@@ -65,21 +69,18 @@ class AutobahnWS:
         self._session_id = None
         self._connect_error = None
 
-        import gc
-        gc.collect()
-
         # Force the heap to settle to find the largest contiguous block
-        import gc, time
         gc.collect()
         await asyncio.sleep_ms(100)
-        gc.collect()
         # Connect using the full URL and WAMP subprotocol
         try:
             # Vovaman handles SSL internally if the URL starts with wss://
-            await self._ws.handshake(self.url, headers=[(b"Sec-WebSocket-Protocol", b"wamp.2.json")])
+            await self._ws.handshake(self.url, headers=[(b"Sec-WebSocket-Protocol", b"wamp.2.json")],
+                                     sni_host=self.sni_host)
         except Exception as e:
             self._connect_error = str(e)
             raise
+        gc.collect()
 
         details = {"roles": {"publisher": {}, "subscriber": {}, "caller": {}, "callee": {}}}
         await self.send_text(json.dumps([C.HELLO, self.realm, details]))
@@ -87,7 +88,6 @@ class AutobahnWS:
         if self._recv_task:
             self._recv_task.cancel()
         self._recv_task = asyncio.create_task(self._recv_loop())
-
 
         # if self.ping_interval_s is not None or self.idle_timeout_s is not None:
         #     if self._keepalive_task:
@@ -126,6 +126,7 @@ class AutobahnWS:
         opts = options or {}
         if acknowledge:
             opts["acknowledge"] = True
+
         msg = [C.PUBLISH, request_id, opts, topic]
         if args is not None or kwargs is not None:
             msg.append(args or [])
@@ -137,7 +138,13 @@ class AutobahnWS:
         if acknowledge:
             waiter = _RPCWaiter()
             self._pending_publishes[request_id] = waiter
-            await self.send_text(json.dumps(msg))
+            try:
+                await self.send_text(json.dumps(msg))
+            except Exception as e:
+                # ensure waiter doesn't hang forever
+                self._pending_publishes.pop(request_id, None)
+                waiter.set_error(e if isinstance(e, Exception) else OSError(str(e)))
+                raise
             return await waiter.wait()
 
         await self.send_text(json.dumps(msg))
@@ -183,7 +190,7 @@ class AutobahnWS:
             self._recv_task = None
         if self._ws:
             await self._ws.open(False)  # Close Vovaman client
-        
+
         # Clear all state to free memory
         self._pending_subscribes.clear()
         self._subscriptions.clear()
@@ -202,40 +209,35 @@ class AutobahnWS:
     async def _recv_loop(self):
         try:
             while True:
-                # 1. Check connection state
                 if not self._ws or not await self._ws.open():
+                    self._disconnect("socket not open")
                     break
 
-                # 2. Vovaman's high-level recv()
-                # returns string for text frames, bytes for binary
                 text = await self._ws.recv()
-
                 if text is None:
-                    # LOG.info("WAMP: Connection closed (recv returned None)")
+                    LOG.warning("WAMP: Connection closed (recv returned None)")
+                    self._disconnect("recv returned None")
                     break
 
                 try:
-                    # Parse the JSON string into WAMP message
                     msg = json.loads(text)
                     await self._handle_wamp_message(msg)
                 except Exception as e:
                     print("WAMP: JSON/Processing error: %s" % e)
-                    # LOG.error("WAMP: JSON/Processing error: %s" % e)
                     continue
 
         except Exception as e:
             print("WAMP: Recv loop exception: %s" % e)
-            #LOG.error("WAMP: Recv loop exception: %s" % e)
+            self._disconnect("recv loop exception: %s" % e)
         finally:
-            self._connected = False
-            self._session_id = None
-            #LOG.info("WAMP: Recv loop stopped")
-            print("WAMP: Recv loop stopped")
+            # ensure we always mark it disconnected
+            self._disconnect("WAMP: Recv loop stopped")
+            LOG.warning("WAMP: Recv loop stopped")
 
     async def send_text(self, data):
-        """Helper to send WAMP JSON strings"""
         if not self._ws or not await self._ws.open():
-            return
+            self._disconnect("send_text on closed socket")
+            raise OSError("socket closed")
         await self._ws.send(data)
 
     async def send_ping(self, data=b''):
@@ -244,15 +246,44 @@ class AutobahnWS:
             try:
                 # Based on your ws.py: write_frame(self, opcode, data=b'')
                 # OP_PING is 0x09
-                self._ws.write_frame(0x09, data)
-                # LOG.debug("WAMP: WebSocket PING sent")
+                self._ws.write_frame(0x09, data)  # LOG.debug("WAMP: WebSocket PING sent")
             except Exception as e:
                 print("WAMP: Failed to send PING: %s" % e)
                 self._connected = False
 
+    # inside AutobahnWS class (client.py)
+
+    def _disconnect(self, reason="disconnected"):
+        # set reason once
+        if self._connect_error is None:
+            self._connect_error = str(reason)
+
+        self._connected = False
+        self._session_id = None
+
+        exc = OSError(self._connect_error)
+
+        # unblock anything awaiting RPC results / publish acks
+        for waiter in self._pending_calls.values():
+            try:
+                waiter.set_error(exc)
+            except Exception:
+                pass
+        self._pending_calls.clear()
+
+        for waiter in self._pending_publishes.values():
+            try:
+                waiter.set_error(exc)
+            except Exception:
+                pass
+        self._pending_publishes.clear()
+
+        # these aren't awaited in your code, but clear to avoid leaks
+        self._pending_subscribes.clear()
+        self._pending_registers.clear()
+
     async def _keepalive_loop(self):
-        """Background task to send periodic PING frames."""
-        print("WAMP: Keepalive loop started (interval: %ss)" % self.ping_interval_s)
+        LOG.info("WAMP: Keepalive loop started (interval: %ss)", self.ping_interval_s)
         try:
             while self._connected:
                 await asyncio.sleep(self.ping_interval_s)
@@ -260,10 +291,8 @@ class AutobahnWS:
                 if not self._connected:
                     break
 
-                # Verify connection is still open before pinging
                 if not await self._ws.open():
-                    print("WAMP: Keepalive detected closed socket")
-                    self._connected = False
+                    self._disconnect("keepalive detected closed socket")
                     break
 
                 await self.send_ping()
@@ -271,7 +300,7 @@ class AutobahnWS:
         except asyncio.CancelledError:
             pass
         except Exception as e:
-            print("WAMP: Keepalive loop error: %s" % e)
+            self._disconnect("keepalive error: %s" % e)
         finally:
             print("WAMP: Keepalive loop stopped")
 
@@ -301,10 +330,10 @@ class AutobahnWS:
             if len(msg) < 3:
                 # log error if possible, or just ignore invalid format
                 return
-            
+
             sub_id = msg[1]
             pub_id = msg[2]
-            
+
             details = msg[3] if len(msg) > 3 and isinstance(msg[3], dict) else {}
             args = msg[4] if len(msg) > 4 and isinstance(msg[4], list) else []
             kwargs = msg[5] if len(msg) > 5 and isinstance(msg[5], dict) else {}
@@ -342,8 +371,7 @@ class AutobahnWS:
                     # Fix: 4th item is Error URI (string), 5th is Args (list)
                     err_msg = [C.ERROR, C.INVOCATION, request_id, {}, "wamp.error.runtime_error", [str(exc)]]
                     await self.send_text(json.dumps(err_msg))
-                    return
-                # If result was None or a value, we just use it directly.
+                    return  # If result was None or a value, we just use it directly.
 
             resp = [C.YIELD, request_id, {}] if result is None else [C.YIELD, request_id, {}, [result]]
             await self.send_text(json.dumps(resp))
