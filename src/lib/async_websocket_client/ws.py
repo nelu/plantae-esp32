@@ -7,6 +7,7 @@ import re
 import struct
 import ssl
 import gc
+from lib.logging import LOG
 
 # Opcodes
 OP_CONT = const(0x0)
@@ -117,6 +118,7 @@ class AsyncWebsocketClient:
                 continue
             if chunk == b'':
                 # Treat as closed socket / EOF
+                if LOG: LOG.warning("a_read_exactly: EOF after %d/%d bytes", got, n)
                 raise EOFError("socket closed while reading")
 
             mv[got:got + len(chunk)] = chunk
@@ -136,8 +138,11 @@ class AsyncWebsocketClient:
 
         host = sni_host or self.uri.hostname
 
+        host = sni_host or self.uri.hostname
+
+        self.sock.settimeout(30.0)
         self.sock.connect(addr)
-        self.sock.setblocking(False)
+        # self.sock.setblocking(False) - Keep blocking/timeout for handshake
 
         if self.uri.protocol == 'wss': # type: ignore
             cadata = None
@@ -157,7 +162,7 @@ class AsyncWebsocketClient:
                 server_hostname=host  # type: ignore
             )
 
-            self.sock.setblocking(False)
+        self.sock.setblocking(False)
 
         def send_header(header, *args):
             self.sock.write(header % args + '\r\n') # type: ignore
@@ -268,6 +273,12 @@ class AsyncWebsocketClient:
         mask = True  # messages sent by client are masked
 
         length = len(data)
+        # if LOG: LOG.debug("write_frame opcode=%s len=%d", hex(opcode), len_data)
+        # if opcode == 0x1 and length < 1000:
+        #      try:
+        #          if LOG: LOG.debug("frame data: %s", data[:200])
+        #      except:
+        #          pass
 
         # Frame header
         # Byte 1: FIN(1) _(1) _(1) _(1) OPCODE(4)
@@ -306,7 +317,12 @@ class AsyncWebsocketClient:
                 fin, opcode, data = await self.read_frame()
             # except (ValueError, EOFError) as ex:
             except Exception as ex:
-                print('Exception in recv while reading frame:', ex)
+                if LOG: LOG.error("ws: Exception in recv: %s", ex)
+                # import sys
+                # try:
+                #     sys.print_exception(ex)
+                # except:
+                #     pass
                 await self.open(False)
                 return
 

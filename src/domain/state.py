@@ -17,6 +17,7 @@ class DeviceState:
         self.ip = "0.0.0.0"
         self.ntp_ok = False
         self.wamp_ok = False
+        self.signal = 0
         self.last_error = ""
         self.version = VERSION
         self.build = BUILD_DATE
@@ -35,5 +36,6 @@ class DeviceState:
             "flow": {"lps": self.flow_lps, "lpm": self.flow_lpm, "vol_l": self.volume_l, "pulses": self.pulses},
             "out": {"switches": list(self.switches), "pwm": self.pwm_duty},
             "dosing": self.dosing_status,
+            "signal": self.signal,
             "health": {"ntp": self.ntp_ok, "wamp": self.wamp_ok, "err": self.last_error},
         }

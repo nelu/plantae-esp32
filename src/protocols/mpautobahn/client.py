@@ -213,7 +213,9 @@ class AutobahnWS:
                     self._disconnect("socket not open")
                     break
 
+                if LOG: LOG.debug("awaiting recv...")
                 text = await self._ws.recv()
+                if LOG: LOG.debug("recv returned length: %s", len(text) if text else "None")
                 if text is None:
                     LOG.warning("WAMP: Connection closed (recv returned None)")
                     self._disconnect("recv returned None")

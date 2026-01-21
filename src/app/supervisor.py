@@ -154,6 +154,9 @@ class Supervisor:
                         if self.state.ip != new_ip:
                             self.state.ip = new_ip
                             if LOG: LOG.info("WiFi IP: %s", self.state.ip)
+                        
+                        # Update signal quality
+                        self.state.signal = self.wifi.get_rssi()
 
             except Exception as e:
                 if LOG: LOG.error("WiFi Monitor Error: %s", e)
@@ -297,7 +300,7 @@ class Supervisor:
                 await asyncio.sleep(3)
 
             try:
-                LOG.info("task_wamp: connect. Free: %d", gc.mem_free())
+                LOG.info("task_wamp: connect. Signal: %d, Free: %d", self.state.signal, gc.mem_free())
                 gc.collect()
                 # self.wamp = WampBridge(self.cfg, self.state, self.service)
                 #                self.wamp = WampBridge(self.cfg, self.state, None)
@@ -306,11 +309,12 @@ class Supervisor:
 
                 await self.wamp.connect()
                 backoff = 1
+                self.fail_count = 0
 
                 while self.wamp.is_alive():
                     # await self.wamp.publish_sense()
                     await self.wamp.publish_status()
-                    await asyncio.sleep(1)
+                    await asyncio.sleep(5)
 
                 # Connection loop ended; close cleanly before reconnecting
                 await self.wamp.close()
@@ -336,6 +340,13 @@ class Supervisor:
 
                 gc.collect()
 
+                self.fail_count = getattr(self, 'fail_count', 0) + 1
+                if self.fail_count > 10:
+                    LOG.error("task_wamp: Too many failures (%d). Rebooting...", self.fail_count)
+                    await asyncio.sleep(5)
+                    from machine import reset
+                    reset()
+
                 # If the underlying error was OSError(16), cool down a bit more
                 eno = None
                 try:
@@ -349,6 +360,10 @@ class Supervisor:
                 msg = str(e)
                 if "send timeout" in msg:
                     await asyncio.sleep(5)
+                elif "MBEDTLS" in msg or "ALLOC_FAILED" in msg or eno == 12: # ENOMEM
+                    LOG.error("task_wamp: Memory/SSL error. Aggressive GC and Cooldown.")
+                    gc.collect()
+                    await asyncio.sleep(10)
                 elif eno == 16:
                     gc.collect()
                     await asyncio.sleep(4)
@@ -433,7 +448,11 @@ class Supervisor:
             # Don't let the system crash silently
             import sys
             sys.print_exception(e)
-            raise
+            
+            LOG.error("Supervisor crashed. Rebooting in 10s...")
+            await asyncio.sleep(10)
+            from machine import reset
+            reset()
 
 
 def start():

@@ -14,6 +14,12 @@ class Wifi:
     def ip(self):
         return self.sta.ifconfig()[0] if self.sta.isconnected() else "0.0.0.0"
 
+    def get_rssi(self):
+        try:
+            return self.sta.status('rssi')
+        except Exception:
+            return 0
+
 
     async def ensure(self, ssid, password, timeout_s=20):
         if self.sta.isconnected():

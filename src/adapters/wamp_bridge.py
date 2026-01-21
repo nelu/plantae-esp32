@@ -166,7 +166,7 @@ class WampBridge:
                    "ver": self.state.version,
                    "build": self.state.build,
                    "ts": time.time(),
-                   "config": {} #self.cfg
+                   "config": self.cfg
                    }
 
         options = {}
@@ -193,6 +193,7 @@ class WampBridge:
         snap = self.state.snapshot()
         for suf in self._addr_suffixes():
             await self.client.publish(self._addr_topic("status", suf), kwargs=snap)
+            await asyncio.sleep(0.1)
 
     async def on_master(self, args, kwargs, details):
         await self.publish_announce("announce.online")
