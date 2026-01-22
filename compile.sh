@@ -39,6 +39,7 @@ FILES=(
     "app/provision.py"
 
     "domain/state.py"
+    "domain/stats.py"
     "domain/dosing.py"
     "domain/scheduler.py"
     "domain/controllers.py"

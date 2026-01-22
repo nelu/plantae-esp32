@@ -3,16 +3,18 @@ import time
 from lib.logging import LOG
 
 class DosingController:
-    def __init__(self, flow_sensor, output_controller, config):
+    def __init__(self, flow_sensor, output_controller, config, state=None, stats=None):
         self.flow_sensor = flow_sensor
         self.output_controller = output_controller
         self.config = config
+        self.state = state
+        self.stats = stats
         self.is_dosing = False
         self.dose_start_volume = 0.0
         self.target_quantity = 0.0
         self.dose_start_time = 0
         self.timeout_s = 60  # 5 minute timeout for safety
-        self.last_auto_dose_day = -1  # Track daily auto-dosing
+        self.last_auto_dose_day = stats.last_dose_day() if stats else -1  # Track daily auto-dosing
         
     def _parse_time(self, time_str):
         """Parse HH:MM format to minutes since midnight"""
@@ -32,6 +34,11 @@ class DosingController:
     
     async def start_dose(self, quantity_l, is_manual=False):
         """Start dosing a specific quantity in liters"""
+        if self.stats:
+            alert = self.stats.get_alert("dosing")
+            if alert:
+                LOG.error("Dosing blocked: alert active (%s)", alert.get("message", ""))
+                return False
         if self.is_dosing:
             LOG.warning("Dosing already in progress")
             return False
@@ -50,10 +57,15 @@ class DosingController:
         self.dose_start_volume = self.flow_sensor.volume_l
         self.target_quantity = float(quantity_l)
         self.dose_start_time = time.time()
-        
+        if self.stats:
+            self.stats.record_dose(self.dose_start_time, persist_immediately=True)
+            self.last_auto_dose_day = self.stats.last_dose_day()
+
         # Start the output at full duty
         self.output_controller.set(output_duty)
-        
+        if self.state:
+            self.state.pwm_duty = output_duty
+
         LOG.info("Started dosing %.3f L (start_volume=%.3f L) %s duty %.3f",
                  self.target_quantity, self.dose_start_volume, 
                  "(manual)" if is_manual else "(auto)", output_duty)
@@ -66,6 +78,8 @@ class DosingController:
             
         self.output_controller.set(0.0)
         self.is_dosing = False
+        if self.state:
+            self.state.pwm_duty = 0.0
         
         dosed_volume = self.flow_sensor.volume_l - self.dose_start_volume
         duration = time.time() - self.dose_start_time
@@ -109,6 +123,8 @@ class DosingController:
         duration = time.time() - self.dose_start_time
         if duration > self.timeout_s:
             LOG.error("Dosing timeout after %.1f seconds", duration)
+            if self.stats:
+                self.stats.set_alert("dosing", "timeout", ts=self.dose_start_time, persist=True)
             self.stop_dose()
             return
             
@@ -137,7 +153,7 @@ class DosingController:
             
         # Only dose once per day
         current_day = int(time.time() // 86400)  # Days since epoch
-        if self.last_auto_dose_day == current_day:
+        if self.last_auto_dose_day >= 0 and current_day <= self.last_auto_dose_day:
             return
             
         # Check if we're at the start of the dosing window

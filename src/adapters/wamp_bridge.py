@@ -114,6 +114,7 @@ class WampBridge:
             await self.client.register(self._topic("control"), self.rpc_control)
             await self.client.register(self._topic("calibrate"), self.rpc_calibrate)
             await self.client.register(self._topic("dose"), self.rpc_dose)
+            await self.client.register(self._topic("alert"), self.rpc_alert)
             await self.client.register(self._topic("output"), self.rpc_output)
             await self.client.register(self._topic("status"), self.rpc_status)
 
@@ -122,6 +123,7 @@ class WampBridge:
             for suf in self._addr_suffixes():
                 await self.client.register(self._addr_topic("calibrate", suf), self.rpc_calibrate)
                 await self.client.register(self._addr_topic("dose", suf), self.rpc_dose)
+                await self.client.register(self._addr_topic("alert", suf), self.rpc_alert)
                 await self.client.register(self._addr_topic("output", suf), self.rpc_output)
                 await self.client.register(self._addr_topic("status", suf), self.rpc_status)
                 # await self.client.register(self._addr_topic("restart", suf), self.rpc_reboot)
@@ -173,7 +175,7 @@ class WampBridge:
         if exclude_me is not None:
             options["exclude_me"] = exclude_me
 
-        pub_id = await self.client.publish(self._topic(topic_name), kwargs=payload, acknowledge=False, options=options)
+        pub_id = await self.client.publish(self._topic(topic_name), kwargs=payload, acknowledge=True, options=options)
         # LOG.debug("Announce published: %s pub_id=%s", topic_name, pub_id)
 
     async def publish_switch(self, idx, on):
@@ -223,6 +225,11 @@ class WampBridge:
         action = kwargs.get("action", "status")
 
         if action == "start":
+            if self.service.stats:
+                alert = self.service.stats.get_alert("dosing")
+                if alert:
+                     return {"error": "alert_active", "reason": alert.get("message"), "ts": alert.get("ts")}
+            
             quantity = kwargs.get("quantity", 0.0)
             if quantity <= 0:
                 return {"error": "invalid_quantity", "quantity": quantity}
@@ -242,6 +249,33 @@ class WampBridge:
 
         else:
             return {"error": "unknown_action", "action": action}
+
+    async def rpc_alert(self, args, kwargs, details):
+        """Handle generic alert management"""
+        action = kwargs.get("action", "list")
+        
+        if action == "list":
+             if self.service.stats:
+                 return self.service.stats.data.get("alerts", {})
+             return {}
+             
+        elif action == "clear":
+             kind = kwargs.get("kind")
+             if not kind:
+                 return {"error": "missing_kind"}
+             self.service.clear_alert(kind)
+             return {"status": "cleared", "kind": kind}
+
+        elif action == "set":
+             # Mostly for testing or manual overrides
+             kind = kwargs.get("kind")
+             message = kwargs.get("message", "manual")
+             if not kind:
+                  return {"error": "missing_kind"}
+             self.service.set_alert(kind, message)
+             return {"status": "set", "kind": kind}
+             
+        return {"error": "unknown_action", "action": action}
 
     async def rpc_output(self, args, kwargs, details):
         """Handle output control RPC calls"""

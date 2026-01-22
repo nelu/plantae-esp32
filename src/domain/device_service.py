@@ -5,11 +5,12 @@ class DeviceService:
     __slots__ = (
         "state","config_mgr","_schedule_reboot",
         "flow","dosing","switches","pwm",
-        "pwm_override","pwm_override_source",
+        "pwm_override","pwm_override_source","stats",
     )
     def __init__(self, state, config_mgr, schedule_reboot, 
                  pwm_controller=None, flow_sensor=None, 
-                 dosing_controller=None, switchbank=None):
+                 dosing_controller=None, switchbank=None,
+                 stats_mgr=None):
         self.state = state
         self.config_mgr = config_mgr
         self._schedule_reboot = schedule_reboot
@@ -17,6 +18,8 @@ class DeviceService:
         self.dosing = dosing_controller
         self.switches = switchbank
         self.pwm = None
+
+        self.stats = stats_mgr
 
 
         self.pwm_override = False
@@ -76,6 +79,18 @@ class DeviceService:
             if hasattr(self.flow, "_vol"): self.flow._vol = 0.0
             if hasattr(self.flow, "_total"): self.flow._total = 0
         return True
+
+    def clear_alert(self, kind):
+        if self.stats:
+            self.stats.clear_alert(kind, persist=True)
+            return True
+        return False
+        
+    def set_alert(self, kind, message):
+         if self.stats:
+             self.stats.set_alert(kind, message, persist=True)
+             return True
+         return False
 
     def set_switch(self, idx, on):
         if self.switches:

@@ -13,12 +13,17 @@ class Supervisor:
         from app.device_id import get_device_id
         from domain.device_service import DeviceService
         from adapters.wamp_bridge import WampBridge
+        from domain.stats import StatsManager
 
         self.cfg_mgr = ConfigManager(config_path)
         self.cfg = self.cfg_mgr.load()
 
+        self.stats = StatsManager("stats.json")
+        stats_data = self.stats.load()
+
         self.device_id = get_device_id(self.cfg)
-        self.state = DeviceState(self.device_id)
+        self.state = DeviceState(self.device_id, stats_data)
+        self.stats.attach_state(self.state)
 
         wifi_cfg = self.cfg.get("wifi") or {}
         ssid = (wifi_cfg.get("ssid") or "").strip()
@@ -44,7 +49,8 @@ class Supervisor:
         self.service = DeviceService(
             self.state,
             self.cfg_mgr,
-            self.schedule_reboot
+            self.schedule_reboot,
+            stats_mgr=self.stats
         )
         self.wamp = WampBridge(self.cfg, self.state, self.service)
 
@@ -115,7 +121,7 @@ class Supervisor:
         self.service.flow = FlowSensor(ppl, fcfg.get("pin", 34))
         self.service.flow.begin(pullup=bool(fcfg.get("pullup_external", True)))
         # refactor this instantiation into service
-        self.service.dosing = DosingController(self.service.flow, self.service.pwm, self.cfg)
+        self.service.dosing = DosingController(self.service.flow, self.service.pwm, self.cfg, state=self.state, stats=self.stats)
         # self.service.switches = self.switchbank
 
     async def task_wifi(self):
@@ -205,6 +211,8 @@ class Supervisor:
                 self.state.flow_lpm = flow.flow_lpm
                 self.state.volume_l = flow.volume_l
                 self.state.pulses = flow.pulses_total
+                if self.stats:
+                    self.stats.accumulate_volume(self.state.volume_l)
                 next_ms = time.ticks_add(now, interval_ms)
             await asyncio.sleep_ms(20)
 
@@ -221,6 +229,13 @@ class Supervisor:
                     duty = duty_from_schedule(sched, mins, secs)
                     self.service.pwm.set(duty)
                     self.state.pwm_duty = duty
+            await asyncio.sleep(1)
+
+    async def task_stats(self):
+        while True:
+            if self.stats:
+                self.stats.track_pwm_runtime(self.state.pwm_duty)
+                self.stats.save_if_needed()
             await asyncio.sleep(1)
 
     async def task_pwm_test_btn(self):
@@ -425,6 +440,7 @@ class Supervisor:
             asyncio.create_task(self.task_pwm_schedule())
             asyncio.create_task(self.task_pwm_test_btn())
             asyncio.create_task(self.task_dosing())
+            asyncio.create_task(self.task_stats())
             gc.collect()
 
             LOG.info("supervisor: tasks started")
