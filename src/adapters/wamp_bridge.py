@@ -44,11 +44,11 @@ class WampBridge:
         out = [self.state.device_id]
         # if self.cfg["wamp"].get("legacy_by_ip", True):
         #     out.append(self.state.ip)
-        seen = set();
+        seen = set()
         uniq = []
         for x in out:
             if x and x not in seen:
-                uniq.append(x);
+                uniq.append(x)
                 seen.add(x)
         return uniq
 
@@ -74,6 +74,7 @@ class WampBridge:
     async def connect(self):
         self.state.wamp_ok = False
         self.session_ready = False
+        self.service.indicator.blink()
         LOG.info("connect: url=%s realm=%s", self.client.url, self.client.realm)
 
         gc.collect()
@@ -109,6 +110,7 @@ class WampBridge:
 
         self.state.wamp_ok = True
         self.state.last_error = None
+        self.service.indicator.on()
 
     async def _on_wamp_join(self):
         """Called when WAMP session is joined - set up subscriptions and registrations"""
@@ -137,6 +139,7 @@ class WampBridge:
 
             LOG.info("_on_wamp_join: completed")
             self.session_ready = True
+            self.service.indicator.on()
             
             # Start keepalive only after session is fully ready
             self.client.start_keepalive()
@@ -146,6 +149,7 @@ class WampBridge:
         except Exception as e:
             LOG.error("_on_wamp_join: failed %s", e)
             gc.collect()
+            self.service.indicator.blink()
 
             raise
 
@@ -159,6 +163,7 @@ class WampBridge:
 
         self.state.wamp_ok = False
         self.session_ready = False
+        self.service.indicator.blink()
 
         # give uasyncio a chance to run socket close callbacks
         await asyncio.sleep_ms(200)

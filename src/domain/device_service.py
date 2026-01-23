@@ -6,6 +6,7 @@ class DeviceService:
         "state","config_mgr","_schedule_reboot",
         "flow","dosing","switches","pwm",
         "pwm_override","pwm_override_source","stats",
+        "indicator",
     )
     def __init__(self, state, config_mgr, schedule_reboot, 
                  pwm_controller=None, flow_sensor=None, 
@@ -24,6 +25,8 @@ class DeviceService:
 
         self.pwm_override = False
         self.pwm_override_source = None
+        self.indicator = self._Indicator(5)
+
 
     def get_status(self):
         return self.state.snapshot()
@@ -111,4 +114,56 @@ class DeviceService:
             self.state.switches[:] = self.switches.values[:]
             return ok
         return False
+
+    # --- Indicator helper (built-in LED/buzzer) ---
+    class _Indicator:
+        __slots__ = ("_pin", "_pwm", "active_low", "_PWM")
+
+        def __init__(self, pin=5):
+            from machine import Pin, PWM
+
+            self._PWM = PWM
+            self.active_low = True  # LOLIN32 built-in LED is active low
+            self._pin = Pin(int(pin), Pin.OUT)
+            self._pwm = None
+            self.off()
+
+        def _clear_pwm(self):
+            pwm = self._pwm
+            if pwm:
+                try:
+                    pwm.deinit()
+                except Exception:
+                    pass
+                self._pwm = None
+
+        def on(self):
+            self._clear_pwm()
+            val = 0 if self.active_low else 1
+            self._pin.value(val)
+
+        def off(self):
+            self._clear_pwm()
+            val = 1 if self.active_low else 0
+            self._pin.value(val)
+
+        def blink(self, freq_hz=1, duty=0.5):
+            pwm = self._pwm or self._PWM(self._pin)
+            freq = int(freq_hz) if freq_hz and freq_hz > 0 else 1
+            pwm.freq(freq)
+            duty = 0.0 if duty is None else duty
+            if duty < 0: duty = 0
+            if duty > 1: duty = 1
+            val = int(duty * 65535)
+            if self.active_low:
+                val = 65535 - val
+            pwm.duty_u16(val)
+            self._pwm = pwm
+
+        def deinit(self):
+            self._clear_pwm()
+            try:
+                self._pin.value(1 if self.active_low else 0)
+            except Exception:
+                pass
 

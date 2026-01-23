@@ -53,6 +53,8 @@ class Supervisor:
             self.schedule_reboot,
             stats_mgr=self.stats
         )
+        if self.is_provisioning:
+            self.service.indicator.blink(freq_hz=3)
         self.wamp = WampBridge(self.cfg, self.state, self.service)
 
         gc.collect()
@@ -476,7 +478,7 @@ class Supervisor:
 
 def start():
     print("BOOT: Waiting 5s for network cleanup...")
-    _maybe_factory_reset_button("config.json", hold_time_s=3, wait_window_s=5)
+    _maybe_factory_reset_button("config.json", hold_time_s=4, wait_window_s=5)
     sup = Supervisor("config.json")
     asyncio.run(sup.run())
 

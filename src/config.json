@@ -48,7 +48,7 @@
       "end": "17:10",
       "output": "pwm",
       "duty": 0.5,
-      "quantity": 0.25
+      "quantity": 0.10
     }
   }
 }
