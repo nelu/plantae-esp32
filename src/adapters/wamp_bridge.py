@@ -12,6 +12,7 @@ class WampBridge:
         self.cfg = cfg
         self.state = state
         self.service = service
+        self.session_ready = False
         self._last_alive_state = False
 
         url = self.cfg["wamp"]["url"]
@@ -72,6 +73,7 @@ class WampBridge:
 
     async def connect(self):
         self.state.wamp_ok = False
+        self.session_ready = False
         LOG.info("connect: url=%s realm=%s", self.client.url, self.client.realm)
 
         gc.collect()
@@ -133,11 +135,16 @@ class WampBridge:
 
             await self.publish_announce("announce.online")
 
-            LOG.info("_on_join: completed")
+            LOG.info("_on_wamp_join: completed")
+            self.session_ready = True
+            
+            # Start keepalive only after session is fully ready
+            self.client.start_keepalive()
+            
             gc.collect()
 
         except Exception as e:
-            LOG.error("_on_join: failed")
+            LOG.error("_on_wamp_join: failed %s", e)
             gc.collect()
 
             raise
@@ -151,6 +158,7 @@ class WampBridge:
                 pass
 
         self.state.wamp_ok = False
+        self.session_ready = False
 
         # give uasyncio a chance to run socket close callbacks
         await asyncio.sleep_ms(200)
@@ -280,7 +288,7 @@ class WampBridge:
     async def rpc_output(self, args, kwargs, details):
         """Handle output control RPC calls"""
         name = kwargs.get("name", "pwm")
-        duty = kwargs.get("duty", 1.0)
+        duty = kwargs.get("duty", 0.5)
         action = kwargs.get("action")
 
         if name == "pwm":

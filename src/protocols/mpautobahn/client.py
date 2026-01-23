@@ -106,12 +106,6 @@ class AutobahnWS:
         if self._connect_error is not None:
             raise OSError(self._connect_error)
 
-        if self.ping_interval_s:
-            # Cancel old task if it exists
-            if hasattr(self, '_ping_task') and self._ping_task:
-                self._ping_task.cancel()
-            self._ping_task = asyncio.create_task(self._keepalive_loop())
-
         return True
 
     def is_connected(self):
@@ -248,10 +242,18 @@ class AutobahnWS:
             try:
                 # Based on your ws.py: write_frame(self, opcode, data=b'')
                 # OP_PING is 0x09
-                self._ws.write_frame(0x09, data)  # LOG.debug("WAMP: WebSocket PING sent")
+                await self._ws.write_frame(0x09, data)  # LOG.debug("WAMP: WebSocket PING sent")
             except Exception as e:
                 print("WAMP: Failed to send PING: %s" % e)
                 self._connected = False
+
+    def start_keepalive(self):
+        """Manually start the keepalive loop."""
+        if self.ping_interval_s:
+            # Cancel old task if it exists
+            if hasattr(self, '_ping_task') and self._ping_task:
+                self._ping_task.cancel()
+            self._ping_task = asyncio.create_task(self._keepalive_loop())
 
     # inside AutobahnWS class (client.py)
 

@@ -36,6 +36,7 @@ class AsyncWebsocketClient:
         self._open = False
         self.delay_read = ms_delay_for_read
         self._lock_for_open = a.Lock()
+        self._lock_for_write = a.Lock()
         self.sock = None
 
     async def open(self, new_val=None):
@@ -52,6 +53,7 @@ class AsyncWebsocketClient:
             return self._open
         finally:
             self._lock_for_open.release()
+
 
     async def close(self, code=None):
         if code is not None:
@@ -268,48 +270,91 @@ class AsyncWebsocketClient:
     #
     #     return fin, opcode, data
 
-    def write_frame(self, opcode, data=b''):
-        fin = True
-        mask = True  # messages sent by client are masked
+    async def _awrite(self, data):
+        if not data:
+            return
+        
+        # In case we get a string (shouldn't happen with internal usage but safety first)
+        if isinstance(data, str):
+            data = data.encode('utf-8')
+            
+        mv = memoryview(data)
+        total = len(data)
+        written = 0
+        
+        while written < total:
+            if not self.sock:
+                raise OSError("Socket closed during write")
+                
+            try:
+                n = self.sock.write(mv[written:])
+                if n is None:
+                    # Some ports return None for would-block
+                    await a.sleep_ms(self.delay_read)
+                    continue
+                if n == 0:
+                     # Should not happen on non-blocking unless closed or weird state
+                     await a.sleep_ms(self.delay_read)
+                     continue
+                written += n
+            except OSError as e:
+                # errno 11 is EAGAIN
+                if e.args[0] == 11:
+                    await a.sleep_ms(self.delay_read)
+                else:
+                    raise
 
-        length = len(data)
-        # if LOG: LOG.debug("write_frame opcode=%s len=%d", hex(opcode), len_data)
-        # if opcode == 0x1 and length < 1000:
-        #      try:
-        #          if LOG: LOG.debug("frame data: %s", data[:200])
-        #      except:
-        #          pass
-
-        # Frame header
-        # Byte 1: FIN(1) _(1) _(1) _(1) OPCODE(4)
-        byte1 = 0x80 if fin else 0
-        byte1 |= opcode
-
-        # Byte 2: MASK(1) LENGTH(7)
-        byte2 = 0x80 if mask else 0
-
-        if length < 126:  # 126 is magic value to use 2-byte length header
-            byte2 |= length
-            self.sock.write(struct.pack('!BB', byte1, byte2))
-
-        elif length < (1 << 16):  # Length fits in 2-bytes
-            byte2 |= 126  # Magic code
-            self.sock.write(struct.pack('!BBH', byte1, byte2, length))
-
-        elif length < (1 << 64):
-            byte2 |= 127  # Magic code
-            self.sock.write(struct.pack('!BBQ', byte1, byte2, length))
-
-        else:
-            raise ValueError()
-
-        if mask:  # Mask is 4 bytes
-            mask_bits = struct.pack('!I', r.getrandbits(32))
-            self.sock.write(mask_bits)
-            data = bytes(b ^ mask_bits[i % 4]
-                         for i, b in enumerate(data))
-
-        self.sock.write(data)
+    async def write_frame(self, opcode, data=b''):
+        await self._lock_for_write.acquire()
+        try:
+            fin = True
+            mask = True  # messages sent by client are masked
+    
+            length = len(data)
+            
+            # Frame header
+            # Byte 1: FIN(1) _(1) _(1) _(1) OPCODE(4)
+            byte1 = 0x80 if fin else 0
+            byte1 |= opcode
+    
+            # Byte 2: MASK(1) LENGTH(7)
+            byte2 = 0x80 if mask else 0
+            
+            header = b''
+    
+            if length < 126:  # 126 is magic value to use 2-byte length header
+                byte2 |= length
+                header = struct.pack('!BB', byte1, byte2)
+    
+            elif length < (1 << 16):  # Length fits in 2-bytes
+                byte2 |= 126  # Magic code
+                header = struct.pack('!BBH', byte1, byte2, length)
+    
+            elif length < (1 << 64):
+                byte2 |= 127  # Magic code
+                header = struct.pack('!BBQ', byte1, byte2, length)
+    
+            else:
+                raise ValueError()
+            
+            # Write header
+            await self._awrite(header)
+    
+            if mask:  # Mask is 4 bytes
+                mask_bits = struct.pack('!I', r.getrandbits(32))
+                await self._awrite(mask_bits)
+                
+                # Apply mask to data
+                # Optimization: for small data, this list comp is ok. 
+                # For large data, we might want to chunk it? 
+                # But 'data' is passed as bytes, so we have it all in RAM anyway.
+                masked_data = bytes(b ^ mask_bits[i % 4] for i, b in enumerate(data))
+                await self._awrite(masked_data)
+            else:
+                await self._awrite(data)
+                
+        finally:
+            self._lock_for_write.release()
 
     async def recv(self):
         while await self.open():
@@ -342,7 +387,7 @@ class AsyncWebsocketClient:
             elif opcode == OP_PING:
                 try:
                     # We need to send a pong frame
-                    self.write_frame(OP_PONG, data)
+                    await self.write_frame(OP_PONG, data)
 
                     # And then continue to wait for a data frame
                     continue
@@ -367,4 +412,4 @@ class AsyncWebsocketClient:
             opcode = OP_BYTES
         else:
             raise TypeError()
-        self.write_frame(opcode, buf)
+        await self.write_frame(opcode, buf)

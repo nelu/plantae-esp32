@@ -328,8 +328,10 @@ class Supervisor:
 
                 while self.wamp.is_alive():
                     # await self.wamp.publish_sense()
-                    await self.wamp.publish_status()
-                    await asyncio.sleep(5)
+                    if self.wamp.session_ready:
+                        await self.wamp.publish_status()
+                    await asyncio.sleep(1)
+                    gc.collect()
 
                 # Connection loop ended; close cleanly before reconnecting
                 await self.wamp.close()
