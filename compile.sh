@@ -12,7 +12,7 @@ rm -rf "$DIST_DIR"
 mkdir -p "$DIST_DIR"
 
 # 2. Copy Assets (main.py, etc)
-ASSETS=("boot.py" "main.py" "config.json" "provision.html")
+ASSETS=("boot.py" "main.py" "provision.html")
 for asset in "${ASSETS[@]}"; do
     if [ -f "$SRC_DIR/$asset" ]; then
         cp "$SRC_DIR/$asset" "$DIST_DIR/$asset"

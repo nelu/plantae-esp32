@@ -1,4 +1,5 @@
 import gc
+import os
 import time
 
 import uasyncio as asyncio
@@ -475,6 +476,59 @@ class Supervisor:
 
 def start():
     print("BOOT: Waiting 5s for network cleanup...")
-    time.sleep(5)
+    _maybe_factory_reset_button("config.json", hold_time_s=3, wait_window_s=5)
     sup = Supervisor("config.json")
     asyncio.run(sup.run())
+
+
+def _maybe_factory_reset_button(config_path="config.json", hold_time_s=5, wait_window_s=5):
+    hold_ms = int(hold_time_s * 1000)
+    window_ms = int(max(hold_time_s, wait_window_s or 0) * 1000)
+
+    try:
+        from machine import Pin
+        from adapters.config_manager import DEFAULT
+    except Exception as e:
+        if LOG: LOG.error("factory_reset: init failed: %s", e)
+        time.sleep_ms(window_ms)
+        return False
+
+    btn_cfg = (DEFAULT.get("inputs") or {}).get("pwm_test_btn", {})
+    pin_num = btn_cfg.get("pin")
+    if pin_num is None:
+        time.sleep_ms(window_ms)
+        return False
+
+    try:
+        btn = Pin(pin_num, Pin.IN)
+    except Exception as e:
+        if LOG: LOG.error("factory_reset: cannot init pin %s: %s", pin_num, e)
+        time.sleep_ms(window_ms)
+        return False
+
+    active_low = btn_cfg.get("active_low", True)
+    required_state = 0 if active_low else 1
+
+    pressed_start = None
+    deadline = time.ticks_add(time.ticks_ms(), window_ms)
+
+    while time.ticks_diff(deadline, time.ticks_ms()) > 0:
+        now = time.ticks_ms()
+        if btn.value() == required_state:
+            if pressed_start is None:
+                pressed_start = now
+                LOG.warning("factory_reset: pressed")
+
+            if time.ticks_diff(now, pressed_start) >= hold_ms:
+                try:
+                    os.remove(config_path)
+                    LOG.warning("factory_reset: %s removed; provisioning", config_path)
+                    return True
+                except Exception as e:
+                    LOG.error("factory_reset: failed to remove %s: %s", config_path, e)
+                    return False
+        else:
+            pressed_start = None
+        time.sleep_ms(50)
+
+    return False

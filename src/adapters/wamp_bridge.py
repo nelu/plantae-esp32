@@ -18,7 +18,7 @@ class WampBridge:
         url = self.cfg["wamp"]["url"]
         realm = self.cfg["wamp"].get("realm", "realm1")
         ka = self.cfg.get("wamp", {}).get("keepalive", {})
-        hostname = self.cfg["wamp"]["sni_host"]
+        hostname = self.cfg["wamp"].get("sni_host")
 
         # Basic gc before connection
         gc.collect()

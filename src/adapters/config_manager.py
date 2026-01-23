@@ -12,7 +12,14 @@ DEFAULT = {
             "ping_interval_s": 25,
             "idle_timeout_s": 180
         }
-  }
+    },
+    "inputs": {
+        "pwm_test_btn": {
+            "pin": 35,
+            "active_low": False,
+            "test_duty": 0.5
+        }
+    },
 }
 
 

@@ -51,9 +51,14 @@ class DeviceService:
         self.pwm_override = override
         self.pwm_override_source = source if override else None
 
-        if override:
-            self.pwm.set(duty)
-            self.state.pwm_duty = duty
+        pwm = self.pwm
+        if not pwm:
+            LOG.error("PWM: controller not initialized")
+            return False
+
+        # Always apply the requested duty so releases take effect immediately
+        pwm.set(duty)
+        self.state.pwm_duty = duty
         # If override is False, task_pwm_schedule will resume schedule on next tick
 
     async def start_dose(self, quantity, is_manual=True):

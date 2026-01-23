@@ -122,7 +122,7 @@ class ProvisionHttp(HttpApi):
                     await self._json(writer, {"ok": False, "error": "bad json"})
                     return
 
-                w = data.get("wifi") if isinstance(data, dict) else None
+                w = data.get("wifi")
                 if not isinstance(w, dict):
                     w = data if isinstance(data, dict) else {}
 
@@ -136,7 +136,9 @@ class ProvisionHttp(HttpApi):
                 result = await self.wifi.test_credentials(ssid, pwd, timeout_s=20, dns_check=True)
 
                 if result.get("connected"):
-                    self.service.patch_config({"wifi": {"ssid": ssid, "password": pwd}})
+                    patch = data or {}
+                    patch["wifi"] = {"ssid": ssid, "password": pwd}
+                    self.service.patch_config(patch)
                     payload = {"ok": True, "saved": True, "rebooting": True}
                     payload.update(result)
                     await self._json(writer, payload)
