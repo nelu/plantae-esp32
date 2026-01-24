@@ -7,6 +7,8 @@ import re
 import struct
 import ssl
 import gc
+import sys
+import time
 from lib.logging import LOG
 
 # Opcodes
@@ -32,12 +34,14 @@ URL_RE = re.compile(r'(wss|ws)://([A-Za-z0-9-\.]+)(?:\:([0-9]+))?(/.+)?')
 URI = namedtuple('URI', ('protocol', 'hostname', 'port', 'path'))
 
 class AsyncWebsocketClient:
-    def __init__(self, ms_delay_for_read: int = 5):
+    def __init__(self, ms_delay_for_read: int = 5, idle_timeout_ms: int | None = None):
         self._open = False
         self.delay_read = ms_delay_for_read
+        self.idle_timeout_ms = idle_timeout_ms
         self._lock_for_open = a.Lock()
         self._lock_for_write = a.Lock()
         self.sock = None
+        self.last_activity_ms = time.ticks_ms()
 
     async def open(self, new_val=None):
         await self._lock_for_open.acquire()
@@ -50,6 +54,8 @@ class AsyncWebsocketClient:
                         pass
                     self.sock = None
                 self._open = new_val
+                if new_val:
+                    self.last_activity_ms = time.ticks_ms()
             return self._open
         finally:
             self._lock_for_open.release()
@@ -111,12 +117,17 @@ class AsyncWebsocketClient:
         buf = bytearray(n)
         mv = memoryview(buf)
         got = 0
+        waited_ms = 0
 
         while got < n:
             chunk = self.sock.read(n - got)  # type: ignore
             await a.sleep_ms(self.delay_read)
+            waited_ms += self.delay_read
 
             if chunk is None:
+                if self.idle_timeout_ms and waited_ms >= self.idle_timeout_ms:
+                    if LOG: LOG.warning("a_read_exactly: timeout waiting for %d/%d bytes", got, n)
+                    raise TimeoutError("socket timed out while reading")
                 continue
             if chunk == b'':
                 # Treat as closed socket / EOF
@@ -125,6 +136,9 @@ class AsyncWebsocketClient:
 
             mv[got:got + len(chunk)] = chunk
             got += len(chunk)
+            waited_ms = 0
+
+        self.last_activity_ms = time.ticks_ms()
 
         return bytes(buf)
 
@@ -137,8 +151,6 @@ class AsyncWebsocketClient:
         self.uri = self.urlparse(uri)
         ai = socket.getaddrinfo(self.uri.hostname, self.uri.port) # type: ignore
         addr = ai[0][4]
-
-        host = sni_host or self.uri.hostname
 
         host = sni_host or self.uri.hostname
 
@@ -233,6 +245,13 @@ class AsyncWebsocketClient:
 
         if mask:
             data = bytes(b ^ mask_bits[i % 4] for i, b in enumerate(data))
+
+        self.last_activity_ms = time.ticks_ms()
+        # if LOG:
+        #     try:
+        #         LOG.debug("ws: frame fin=%s opcode=%s len=%d", fin, opcode, len(data) if data is not None else 0)
+        #     except Exception:
+        #         pass
 
         return fin, opcode, data
 
@@ -352,7 +371,8 @@ class AsyncWebsocketClient:
                 await self._awrite(masked_data)
             else:
                 await self._awrite(data)
-                
+            self.last_activity_ms = time.ticks_ms()
+
         finally:
             self._lock_for_write.release()
 
@@ -360,14 +380,20 @@ class AsyncWebsocketClient:
         while await self.open():
             try:
                 fin, opcode, data = await self.read_frame()
-            # except (ValueError, EOFError) as ex:
+            except EOFError as ex:
+                # if LOG: LOG.warning("ws: EOF in recv: %s", ex)
+                await self.open(False)
+                return
+            except TimeoutError as ex:
+                # if LOG: LOG.warning("ws: Timeout in recv: %s", ex)
+                await self.open(False)
+                return
             except Exception as ex:
-                if LOG: LOG.error("ws: Exception in recv: %s", ex)
-                # import sys
-                # try:
-                #     sys.print_exception(ex)
-                # except:
-                #     pass
+                # if LOG: LOG.error("ws: Exception in recv: %s", ex)
+                try:
+                    sys.print_exception(ex)
+                except Exception:
+                    pass
                 await self.open(False)
                 return
 
@@ -379,20 +405,39 @@ class AsyncWebsocketClient:
             elif opcode == OP_BYTES:
                 return data
             elif opcode == OP_CLOSE:
+                close_code = None
+                close_reason = ""
+                try:
+                    if data and len(data) >= 2:
+                        close_code = struct.unpack('!H', data[:2])[0]
+                        if len(data) > 2:
+                            close_reason = data[2:].decode('utf-8', 'ignore')
+                except Exception:
+                    pass
+                # if LOG: LOG.warning("ws: received CLOSE frame code=%s reason=%s", close_code, close_reason)
                 await self.open(False)
                 return
             elif opcode == OP_PONG:
+                # if LOG: LOG.debug("ws: received PONG len=%d", len(data) if data else 0)
+                self.last_activity_ms = time.ticks_ms()
                 # Ignore this frame, keep waiting for a data frame
                 continue
             elif opcode == OP_PING:
                 try:
-                    # We need to send a pong frame
+                    # if LOG: LOG.debug("ws: received PING len=%d", len(data) if data else 0)
+                    self.last_activity_ms = time.ticks_ms()
+                    # if LOG: LOG.debug("ws: sending PONG len=%d open=%s sock=%s", len(data) if data else 0, await self.open(), self.sock)
                     await self.write_frame(OP_PONG, data)
+                    # if LOG: LOG.debug("ws: sent PONG len=%d", len(data) if data else 0)
 
                     # And then continue to wait for a data frame
                     continue
                 except Exception as ex:
-                    print('Error sending pong frame:', ex)
+                    if LOG: LOG.error("ws: Error sending PONG: %s", ex)
+                    try:
+                        sys.print_exception(ex)
+                    except Exception:
+                        pass
                     # If sending the pong frame fails, close the connection
                     await self.open(False)
                     return

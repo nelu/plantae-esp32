@@ -114,6 +114,7 @@ class WampBridge:
 
     async def _on_wamp_join(self):
         """Called when WAMP session is joined - set up subscriptions and registrations"""
+        LOG.info("_on_wamp_join: start")
         try:
             await self.client.register(self._topic("control"), self.rpc_control)
             await self.client.register(self._topic("calibrate"), self.rpc_calibrate)
@@ -137,12 +138,12 @@ class WampBridge:
 
             await self.publish_announce("announce.online")
 
-            LOG.info("_on_wamp_join: completed")
+            LOG.info("_on_wamp_join: completed session=%s", getattr(self.client, "_session_id", None))
             self.session_ready = True
             self.service.indicator.on()
-            
+
             # Start keepalive only after session is fully ready
-            self.client.start_keepalive()
+            # self.client.start_keepalive()
             
             gc.collect()
 
@@ -238,27 +239,51 @@ class WampBridge:
         action = kwargs.get("action", "status")
 
         if action == "start":
-            if self.service.stats:
-                alert = self.service.stats.get_alert("dosing")
-                if alert:
-                     return {"error": "alert_active", "reason": alert.get("message"), "ts": alert.get("ts")}
-            
             quantity = kwargs.get("quantity", 0.0)
             if quantity <= 0:
                 return {"error": "invalid_quantity", "quantity": quantity}
 
-            success = await self.service.start_dose(quantity, is_manual=True)
+            success = await self.service.dosing.start_dose(quantity, is_manual=True)
             if success:
                 return {"status": "started", "quantity": quantity}
             else:
                 return {"error": "failed_to_start"}
 
+        elif action == "set_schedule":
+            dosing_cfg = kwargs.get("dosing") or kwargs.get("schedule") or {}
+            if not isinstance(dosing_cfg, dict):
+                return {"error": "invalid_payload", "reason": "dosing config must be dict"}
+
+            if "start" not in dosing_cfg or "end" not in dosing_cfg:
+                return {"error": "missing_timeframe", "required": ["start", "end"]}
+
+            new_cfg = {}
+
+            start = str(dosing_cfg.get("start", ""))
+            end = str(dosing_cfg.get("end", ""))
+            if ":" not in start or ":" not in end:
+                return {"error": "invalid_timeframe"}
+            new_cfg["start"] = start
+            new_cfg["end"] = end
+
+            if "quantity" in dosing_cfg:
+                try:
+                    qty = float(dosing_cfg.get("quantity", 0))
+                except Exception:
+                    return {"error": "invalid_field", "field": "quantity"}
+                if qty < 0:
+                    return {"error": "invalid_field", "field": "quantity"}
+                new_cfg["quantity"] = qty
+
+            self.service.patch_config({"schedule": {"dosing": new_cfg}})
+            return {"status": "updated"}
+
         elif action == "stop":
-            success = self.service.stop_dose()
+            success = self.service.dosing.stop_dose()
             return {"status": "stopped" if success else "not_active"}
 
         elif action == "status":
-            return self.service.get_dose_status()
+            return self.service.dosing.get_dose_status()
 
         else:
             return {"error": "unknown_action", "action": action}

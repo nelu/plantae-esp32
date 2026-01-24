@@ -1,6 +1,5 @@
-import gc
-import os
 import time
+import gc
 
 import uasyncio as asyncio
 
@@ -8,7 +7,7 @@ from lib.logging import LOG
 
 
 class Supervisor:
-    def __init__(self, config_path="config.json"):
+    def __init__(self, config_path="config.json", boot_ctx=None):
         from domain.state import DeviceState
         from adapters.config_manager import ConfigManager
         from app.device_id import get_device_id
@@ -16,26 +15,39 @@ class Supervisor:
         from adapters.wamp_bridge import WampBridge
         from domain.stats import StatsManager
 
-        self.cfg_mgr = ConfigManager(config_path)
-        self.cfg = self.cfg_mgr.load()
+        boot_ctx = boot_ctx or {}
+
+        self.cfg_mgr = boot_ctx.get("cfg_mgr") if boot_ctx else None
+        if not self.cfg_mgr:
+            self.cfg_mgr = ConfigManager(config_path)
+
+        self.cfg = boot_ctx.get("cfg") if boot_ctx else None
+        if not self.cfg:
+            self.cfg = self.cfg_mgr.load()
 
         self.stats = StatsManager("stats.json")
         stats_data = self.stats.load()
 
-        self.device_id = get_device_id(self.cfg)
+        self.device_id = boot_ctx.get("device_id") if boot_ctx else None
+        if not self.device_id:
+            self.device_id = get_device_id(self.cfg)
         self.state = DeviceState(self.device_id, stats_data)
         self.stats.attach_state(self.state)
 
         wifi_cfg = self.cfg.get("wifi") or {}
         ssid = (wifi_cfg.get("ssid") or "").strip()
-        self.is_provisioning = not ssid
+        self.is_provisioning = boot_ctx.get("is_provisioning") if boot_ctx else None
+        if self.is_provisioning is None:
+            self.is_provisioning = not ssid
 
-        if self.is_provisioning:
-            from app.provision import ProvisionWifi
-            self.wifi = ProvisionWifi()
-        else:
-            from adapters.wifi import Wifi
-            self.wifi = Wifi()
+        self.wifi = boot_ctx.get("wifi") if boot_ctx else None
+        if not self.wifi:
+            if self.is_provisioning:
+                from app.provision import ProvisionWifi
+                self.wifi = ProvisionWifi()
+            else:
+                from adapters.wifi import Wifi
+                self.wifi = Wifi()
 
         self.switchbank = None
         # self.flow = None
@@ -76,6 +88,10 @@ class Supervisor:
 
     def _maybe_reboot(self):
         if self._reboot_at and time.ticks_diff(time.ticks_ms(), self._reboot_at) >= 0:
+            try:
+                self.service.shutdown_outputs()
+            except Exception as e:
+                LOG.error("shutdown before reset failed: %s", e)
             from machine import reset
             reset()
 
@@ -127,48 +143,34 @@ class Supervisor:
         self.service.dosing = DosingController(self.service.flow, self.service.pwm, self.cfg, state=self.state, stats=self.stats)
         # self.service.switches = self.switchbank
 
-    async def task_wifi(self):
-        """Provisioning: start AP only. Normal: keep STA connected."""
-        ap_started = False
-        ap_name = self.device_id  # or whatever naming you use
-
+    async def task_wifi_status(self):
+        """Update IP/signal without managing reconnects."""
         while True:
             try:
+                if not self.wifi:
+                    await asyncio.sleep(5)
+                    continue
+
                 if self.is_provisioning:
-                    if not ap_started:
-                        self.wifi.start_ap(ap_name)
-                        try:
-                            self.wifi.sta.active(False)
-                        except Exception:
-                            pass
-                        ap_started = True
-
-                    new_ip = self.wifi.ap_ip()
-                    if self.state.ip != new_ip:
-                        self.state.ip = new_ip
-                        if LOG: LOG.info("AP IP: %s", self.state.ip)
-
+                    if hasattr(self.wifi, "ap_ip"):
+                        new_ip = self.wifi.ap_ip()
+                        if self.state.ip != new_ip:
+                            self.state.ip = new_ip
+                            if LOG: LOG.info("AP IP: %s", self.state.ip)
                 else:
-                    # Station mode (your current logic, but safer .get())
-                    wifi_cfg = self.cfg.get("wifi") or {}
-                    ssid = wifi_cfg.get("ssid")
-                    pwd = wifi_cfg.get("password")
-
-                    if ssid and not self.wifi.is_connected():
-                        LOG.warning("task_wifi disconnected, reconnecting...")
-                        await self.wifi.ensure(ssid, pwd)
-
                     if self.wifi.is_connected():
                         new_ip = self.wifi.ip()
                         if self.state.ip != new_ip:
                             self.state.ip = new_ip
                             if LOG: LOG.info("WiFi IP: %s", self.state.ip)
-                        
-                        # Update signal quality
-                        self.state.signal = self.wifi.get_rssi()
-
+                        try:
+                            self.state.signal = self.wifi.get_rssi()
+                        except Exception:
+                            pass
+                    else:
+                        self.state.ip = "0.0.0.0"
             except Exception as e:
-                if LOG: LOG.error("WiFi Monitor Error: %s", e)
+                if LOG: LOG.error("WiFi Status Error: %s", e)
 
             await asyncio.sleep(5)
 
@@ -395,6 +397,7 @@ class Supervisor:
 
     async def task_dosing(self):
         """Update dosing controller regularly"""
+        LOG.debug("task_dosing: started")
         while True:
             if self.service.dosing:
                 mins = self._local_minutes()
@@ -404,11 +407,13 @@ class Supervisor:
             await asyncio.sleep(0.5)  # Update twice per second for precision
 
     async def run(self):
+        import gc
+
         try:
             LOG.info("supervisor: run")
 
             asyncio.create_task(self.task_reboot_watch())
-            asyncio.create_task(self.task_wifi())
+            asyncio.create_task(self.task_wifi_status())
 
             if self.is_provisioning:
                 LOG.info("Provisioning mode")
@@ -419,34 +424,36 @@ class Supervisor:
                     await asyncio.sleep(1)
 
             # dont run any task without wifi
-            while not self.wifi.is_connected():
+            while not self.wifi or not self.wifi.is_connected():
                 await asyncio.sleep(2)
 
             # normal mode continues:
             asyncio.create_task(self.task_ntp())
-            import gc
-            gc.collect()
 
-            asyncio.create_task(self.task_wamp())
-            gc.collect()
-
-            while not self.state.wamp_ok:
-                await asyncio.sleep(1)
-
-            gc.collect()
+            while not self.state.ntp_ok:
+                await asyncio.sleep(2)
+                continue
 
             self._init_hw()
-            # gc.collect()
-            # if self.wamp:
-            #     self.wamp.service = self.service
-            #     # Only after WAMP is connected, start other memory-intensive tasks
-            gc.collect()
             asyncio.create_task(self.task_flow())
             asyncio.create_task(self.task_pwm_schedule())
             asyncio.create_task(self.task_pwm_test_btn())
             asyncio.create_task(self.task_dosing())
             asyncio.create_task(self.task_stats())
-            gc.collect()
+
+            asyncio.create_task(self.task_wamp())
+
+            while not self.state.wamp_ok:
+                await asyncio.sleep(1)
+                gc.collect()
+
+
+
+            # gc.collect()
+            # if self.wamp:
+            #     self.wamp.service = self.service
+            #     # Only after WAMP is connected, start other memory-intensive tasks
+
 
             LOG.info("supervisor: tasks started")
 
@@ -476,61 +483,6 @@ class Supervisor:
             reset()
 
 
-def start():
-    print("BOOT: Waiting 5s for network cleanup...")
-    _maybe_factory_reset_button("config.json", hold_time_s=4, wait_window_s=5)
-    sup = Supervisor("config.json")
+def start(boot_ctx=None):
+    sup = Supervisor("config.json", boot_ctx=boot_ctx)
     asyncio.run(sup.run())
-
-
-def _maybe_factory_reset_button(config_path="config.json", hold_time_s=5, wait_window_s=5):
-    hold_ms = int(hold_time_s * 1000)
-    window_ms = int(max(hold_time_s, wait_window_s or 0) * 1000)
-
-    try:
-        from machine import Pin
-        from adapters.config_manager import DEFAULT
-    except Exception as e:
-        if LOG: LOG.error("factory_reset: init failed: %s", e)
-        time.sleep_ms(window_ms)
-        return False
-
-    btn_cfg = (DEFAULT.get("inputs") or {}).get("pwm_test_btn", {})
-    pin_num = btn_cfg.get("pin")
-    if pin_num is None:
-        time.sleep_ms(window_ms)
-        return False
-
-    try:
-        btn = Pin(pin_num, Pin.IN)
-    except Exception as e:
-        if LOG: LOG.error("factory_reset: cannot init pin %s: %s", pin_num, e)
-        time.sleep_ms(window_ms)
-        return False
-
-    active_low = btn_cfg.get("active_low", True)
-    required_state = 0 if active_low else 1
-
-    pressed_start = None
-    deadline = time.ticks_add(time.ticks_ms(), window_ms)
-
-    while time.ticks_diff(deadline, time.ticks_ms()) > 0:
-        now = time.ticks_ms()
-        if btn.value() == required_state:
-            if pressed_start is None:
-                pressed_start = now
-                LOG.warning("factory_reset: pressed")
-
-            if time.ticks_diff(now, pressed_start) >= hold_ms:
-                try:
-                    os.remove(config_path)
-                    LOG.warning("factory_reset: %s removed; provisioning", config_path)
-                    return True
-                except Exception as e:
-                    LOG.error("factory_reset: failed to remove %s: %s", config_path, e)
-                    return False
-        else:
-            pressed_start = None
-        time.sleep_ms(50)
-
-    return False

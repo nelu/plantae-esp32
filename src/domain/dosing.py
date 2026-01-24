@@ -27,18 +27,13 @@ class DosingController:
         if not dosing_cfg:
             return False
             
-        start_min = self._parse_time(dosing_cfg.get("start", "08:00"))
+        start_min = self._parse_time(dosing_cfg.get("start", "20:07"))
         end_min = self._parse_time(dosing_cfg.get("end", "20:10"))
         
         return start_min <= local_minutes < end_min
     
     async def start_dose(self, quantity_l, is_manual=False):
         """Start dosing a specific quantity in liters"""
-        if self.stats:
-            alert = self.stats.get_alert("dosing")
-            if alert:
-                LOG.error("Dosing blocked: alert active (%s)", alert.get("message", ""))
-                return False
         if self.is_dosing:
             LOG.warning("Dosing already in progress")
             return False
@@ -57,9 +52,6 @@ class DosingController:
         self.dose_start_volume = self.flow_sensor.volume_l
         self.target_quantity = float(quantity_l)
         self.dose_start_time = time.time()
-        if self.stats:
-            self.stats.record_dose(self.dose_start_time, persist_immediately=True)
-            self.last_auto_dose_day = self.stats.last_dose_day()
 
         # Start the output at full duty
         self.output_controller.set(output_duty)
@@ -133,6 +125,9 @@ class DosingController:
         if dosed_volume >= self.target_quantity:
             LOG.info("Dosing complete: %.3f L in %.1f seconds", 
                      dosed_volume, duration)
+            if not self._is_manual_dose and self.stats:
+                self.stats.record_dose(time.time(), persist_immediately=True)
+                self.last_auto_dose_day = self.stats.last_dose_day()
             self.stop_dose()
             return
             
@@ -157,10 +152,15 @@ class DosingController:
             return
             
         # Check if we're at the start of the dosing window
-        start_min = self._parse_time(dosing_cfg.get("start", "08:00"))
+        start_min = self._parse_time(dosing_cfg.get("start", "20:00"))
         if abs(local_minutes - start_min) <= 1:  # Within 1 minute of start time
             quantity = float(dosing_cfg.get("quantity", 0))
             if quantity > 0:
+                if self.stats:
+                    alert = self.stats.get_alert("dosing")
+                    if alert:
+                        LOG.error("Automatic dosing blocked: alert active (%s)", alert.get("message", ""))
+                        return
                 success = await self.start_dose(quantity)
                 if success:
                     self.last_auto_dose_day = current_day

@@ -43,6 +43,33 @@ class DeviceService:
         self._schedule_reboot(timeout_s)
         return True
 
+    def shutdown_outputs(self):
+        """Safely release active outputs before reboot/reset."""
+        try:
+            if self.dosing and getattr(self.dosing, "is_dosing", False):
+                self.dosing.stop_dose()
+        except Exception as e:
+            LOG.error("shutdown_outputs: dosing stop failed: %s", e)
+
+        self.pwm_override = False
+        self.pwm_override_source = None
+
+        pwm = self.pwm
+        if pwm:
+            try:
+                pwm.set(0.0)
+            except Exception as e:
+                LOG.error("shutdown_outputs: pwm set failed: %s", e)
+            try:
+                pwm.release()
+            except Exception as e:
+                LOG.error("shutdown_outputs: pwm release failed: %s", e)
+
+        try:
+            self.state.pwm_duty = 0.0
+        except Exception:
+            pass
+
     def set_pwm_manual(self, duty, override=True, source="other"):
         """Set PWM duty manually with override flag. duty=0 releases override if override=False."""
         if duty == 0:
@@ -64,20 +91,6 @@ class DeviceService:
         self.state.pwm_duty = duty
         # If override is False, task_pwm_schedule will resume schedule on next tick
 
-    async def start_dose(self, quantity, is_manual=True):
-        if self.dosing:
-            return await self.dosing.start_dose(quantity, is_manual=is_manual)
-        return False
-
-    def stop_dose(self):
-        if self.dosing:
-            return self.dosing.stop_dose()
-        return False
-
-    def get_dose_status(self):
-        if self.dosing:
-            return self.dosing.get_dose_status()
-        return {}
 
     def reset_counters(self):
         self.state.volume_l = 0.0
@@ -166,4 +179,3 @@ class DeviceService:
                 self._pin.value(1 if self.active_low else 0)
             except Exception:
                 pass
-

@@ -45,7 +45,8 @@ class AutobahnWS:
         self.url = url
         self.realm = realm
         self.sni_host = sni_host
-        self._ws = AsyncWebsocketClient()  # Vovaman client
+        idle_ms = int(idle_timeout_s * 1000) if idle_timeout_s else None
+        self._ws = AsyncWebsocketClient(idle_timeout_ms=idle_ms)  # Vovaman client
         self._connected = False
         self._session_id = None
         self._next_request_id = 1
@@ -208,10 +209,28 @@ class AutobahnWS:
                     break
 
                 if LOG: LOG.debug("awaiting recv...")
-                text = await self._ws.recv()
+                recv_coro = self._ws.recv()
+                try:
+                    if self.idle_timeout_s:
+                        text = await asyncio.wait_for(recv_coro, self.idle_timeout_s)
+                    else:
+                        text = await recv_coro
+                except AttributeError:
+                    text = await recv_coro
+                except asyncio.TimeoutError:
+                    LOG.warning("recv timeout after %ss mem_free=%d", self.idle_timeout_s, gc.mem_free())
+                    self._disconnect("recv timeout")
+                    break
                 if LOG: LOG.debug("recv returned length: %s", len(text) if text else "None")
+                if hasattr(self._ws, "last_activity_ms"):
+                    try:
+                        idle_ms = time.ticks_diff(time.ticks_ms(), self._ws.last_activity_ms)
+                        #LOG.debug("recv idle since last activity: %d ms", idle_ms)
+                    except Exception:
+                        pass
                 if text is None:
-                    LOG.warning("WAMP: Connection closed (recv returned None)")
+                    open_state = await self._ws.open()
+                    LOG.warning("WAMP: Connection closed (recv returned None) mem_free=%d open=%s", gc.mem_free(), open_state)
                     self._disconnect("recv returned None")
                     break
 
@@ -242,7 +261,8 @@ class AutobahnWS:
             try:
                 # Based on your ws.py: write_frame(self, opcode, data=b'')
                 # OP_PING is 0x09
-                await self._ws.write_frame(0x09, data)  # LOG.debug("WAMP: WebSocket PING sent")
+                await self._ws.write_frame(0x09, data)
+                if LOG: LOG.debug("WAMP: WebSocket PING sent len=%d", len(data) if data else 0)
             except Exception as e:
                 print("WAMP: Failed to send PING: %s" % e)
                 self._connected = False
@@ -253,6 +273,7 @@ class AutobahnWS:
             # Cancel old task if it exists
             if hasattr(self, '_ping_task') and self._ping_task:
                 self._ping_task.cancel()
+            if LOG: LOG.info("WAMP: Keepalive starting (interval=%ss)", self.ping_interval_s)
             self._ping_task = asyncio.create_task(self._keepalive_loop())
 
     # inside AutobahnWS class (client.py)
@@ -288,6 +309,7 @@ class AutobahnWS:
 
     async def _keepalive_loop(self):
         LOG.info("WAMP: Keepalive loop started (interval: %ss)", self.ping_interval_s)
+        ping_interval_ms = int(self.ping_interval_s * 1000)
         try:
             while self._connected:
                 await asyncio.sleep(self.ping_interval_s)
@@ -299,6 +321,14 @@ class AutobahnWS:
                     self._disconnect("keepalive detected closed socket")
                     break
 
+                now = time.ticks_ms()
+                last = getattr(self._ws, "last_activity_ms", now)
+                idle_ms = time.ticks_diff(now, last)
+                if idle_ms < ping_interval_ms:
+                    if LOG: LOG.debug("WAMP: keepalive skipped, last activity %dms ago", idle_ms)
+                    continue
+
+                if LOG: LOG.debug("WAMP: keepalive ping mem_free=%d idle_ms=%d", gc.mem_free(), idle_ms)
                 await self.send_ping()
 
         except asyncio.CancelledError:
