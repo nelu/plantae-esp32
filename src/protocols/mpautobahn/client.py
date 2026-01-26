@@ -5,6 +5,8 @@ import time
 import uasyncio as asyncio
 import ujson as json
 
+from lib import umsgpack
+
 from lib.async_websocket_client.ws import AsyncWebsocketClient
 from lib.logging import LOG
 from . import constants as C
@@ -41,7 +43,8 @@ class _RPCWaiter:
 class AutobahnWS:
     """WAMP client for MicroPython, transport: WebSocket (ws/wss)."""
 
-    def __init__(self, url, realm, ping_interval_s=30, idle_timeout_s=60, sni_host=None):
+    def __init__(self, url, realm, ping_interval_s=30, idle_timeout_s=60, sni_host=None,
+                 serializer="msgpack", allow_json_fallback=True):
         self.url = url
         self.realm = realm
         self.sni_host = sni_host
@@ -65,6 +68,27 @@ class AutobahnWS:
         self._on_join = None
         self._connect_error = None
 
+        self._allow_json_fallback = allow_json_fallback
+        self._set_serializer(serializer)
+
+    def _set_serializer(self, serializer):
+        ser = (serializer or "json").lower()
+        if ser not in ("json", "msgpack"):
+            ser = "json"
+        self.serializer = ser
+        if ser == "msgpack":
+            self._subprotocol = b"wamp.2.msgpack"
+            self._encode = lambda obj: umsgpack.dumps(obj)
+            self._decode = lambda data: umsgpack.loads(data if isinstance(data, (bytes, bytearray)) else data.encode())
+        else:
+            self._subprotocol = b"wamp.2.json"
+            self._encode = lambda obj: json.dumps(obj)
+            self._decode = lambda data: json.loads(data if isinstance(data, str) else data.decode())
+
+    async def _do_handshake(self):
+        await self._ws.handshake(self.url, headers=[(b"Sec-WebSocket-Protocol", self._subprotocol)],
+                                 sni_host=self.sni_host)
+
     async def connect(self, timeout_s=10):
         self._connected = False
         self._session_id = None
@@ -76,15 +100,23 @@ class AutobahnWS:
         # Connect using the full URL and WAMP subprotocol
         try:
             # Vovaman handles SSL internally if the URL starts with wss://
-            await self._ws.handshake(self.url, headers=[(b"Sec-WebSocket-Protocol", b"wamp.2.json")],
-                                     sni_host=self.sni_host)
+            await self._do_handshake()
         except Exception as e:
-            self._connect_error = str(e)
-            raise
+            if self.serializer == "msgpack" and self._allow_json_fallback:
+                if LOG: LOG.warning("WAMP: msgpack handshake failed, falling back to JSON: %s", e)
+                self._set_serializer("json")
+                try:
+                    await self._do_handshake()
+                except Exception as e2:
+                    self._connect_error = str(e2)
+                    raise
+            else:
+                self._connect_error = str(e)
+                raise
         gc.collect()
 
         details = {"roles": {"publisher": {}, "subscriber": {}, "caller": {}, "callee": {}}}
-        await self.send_text(json.dumps([C.HELLO, self.realm, details]))
+        await self._send_msg([C.HELLO, self.realm, details])
 
         if self._recv_task:
             self._recv_task.cancel()
@@ -134,7 +166,7 @@ class AutobahnWS:
             waiter = _RPCWaiter()
             self._pending_publishes[request_id] = waiter
             try:
-                await self.send_text(json.dumps(msg))
+                await self._send_msg(msg)
             except Exception as e:
                 # ensure waiter doesn't hang forever
                 self._pending_publishes.pop(request_id, None)
@@ -142,12 +174,12 @@ class AutobahnWS:
                 raise
             return await waiter.wait()
 
-        await self.send_text(json.dumps(msg))
+        await self._send_msg(msg)
 
     async def subscribe(self, topic, callback, options=None):
         request_id = self._next_id()
         self._pending_subscribes[request_id] = (topic, callback)
-        await self.send_text(json.dumps([C.SUBSCRIBE, request_id, options or {}, topic]))
+        await self._send_msg([C.SUBSCRIBE, request_id, options or {}, topic])
 
     async def unsubscribe(self, topic):
         pass  # Not implemented to keep footprint small
@@ -155,7 +187,7 @@ class AutobahnWS:
     async def register(self, procedure, callback, options=None):
         request_id = self._next_id()
         self._pending_registers[request_id] = (procedure, callback)
-        await self.send_text(json.dumps([C.REGISTER, request_id, options or {}, procedure]))
+        await self._send_msg([C.REGISTER, request_id, options or {}, procedure])
 
     async def call(self, procedure, *args):
         request_id = self._next_id()
@@ -165,13 +197,13 @@ class AutobahnWS:
         msg = [C.CALL, request_id, {}, procedure]
         if args:
             msg.append(list(args))
-        await self.send_text(json.dumps(msg))
+        await self._send_msg(msg)
         return await waiter.wait()
 
     async def close(self):
         try:
             if self._connected:
-                await self.send_text(json.dumps([C.GOODBYE, {}, "wamp.close.normal"]))
+                await self._send_msg([C.GOODBYE, {}, "wamp.close.normal"])
         except Exception:
             pass
 
@@ -235,10 +267,10 @@ class AutobahnWS:
                     break
 
                 try:
-                    msg = json.loads(text)
+                    msg = self._decode(text)
                     await self._handle_wamp_message(msg)
                 except Exception as e:
-                    print("WAMP: JSON/Processing error: %s" % e)
+                    print("WAMP: decode/processing error (%s): %s" % (self.serializer, e))
                     continue
 
         except Exception as e:
@@ -254,6 +286,10 @@ class AutobahnWS:
             self._disconnect("send_text on closed socket")
             raise OSError("socket closed")
         await self._ws.send(data)
+
+    async def _send_msg(self, msg):
+        encoded = self._encode(msg)
+        await self.send_text(encoded)
 
     async def send_ping(self, data=b''):
         """Send a low-level WebSocket PING frame."""
@@ -404,11 +440,11 @@ class AutobahnWS:
                 except Exception as exc:
                     # Fix: 4th item is Error URI (string), 5th is Args (list)
                     err_msg = [C.ERROR, C.INVOCATION, request_id, {}, "wamp.error.runtime_error", [str(exc)]]
-                    await self.send_text(json.dumps(err_msg))
+                    await self._send_msg(err_msg)
                     return  # If result was None or a value, we just use it directly.
 
             resp = [C.YIELD, request_id, {}] if result is None else [C.YIELD, request_id, {}, [result]]
-            await self.send_text(json.dumps(resp))
+            await self._send_msg(resp)
 
         elif code == C.RESULT:
             req_id = msg[1]

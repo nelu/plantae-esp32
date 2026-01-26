@@ -54,6 +54,16 @@ FILES=(
     "lib/async_websocket_client/__init__.py"
     "lib/async_websocket_client/ws.py"
 
+    "lib/umsgpack/__init__.py"
+    "lib/umsgpack/mp_dump.py"
+    "lib/umsgpack/mp_load.py"
+    "lib/umsgpack/mpk_bytearray.py"
+    "lib/umsgpack/mpk_tuple.py"
+    "lib/umsgpack/mpk_set.py"
+    "lib/umsgpack/mpk_odict.py"
+    "lib/umsgpack/mpk_complex.py"
+    "lib/umsgpack/as_loader.py"
+
 
 )
 

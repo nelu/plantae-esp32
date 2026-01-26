@@ -12,6 +12,7 @@
     "sni_host": "plantae.robits.org",
     "realm": "realm1",
     "prefix": "org.robits.plantae.",
+    "serializer": "msgpack",
     "keepalive": {
       "ping_interval_s": 25,
       "idle_timeout_s": 180

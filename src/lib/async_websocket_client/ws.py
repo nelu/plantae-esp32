@@ -328,47 +328,54 @@ class AsyncWebsocketClient:
         try:
             fin = True
             mask = True  # messages sent by client are masked
-    
+
             length = len(data)
-            
+
             # Frame header
             # Byte 1: FIN(1) _(1) _(1) _(1) OPCODE(4)
             byte1 = 0x80 if fin else 0
             byte1 |= opcode
-    
+
             # Byte 2: MASK(1) LENGTH(7)
             byte2 = 0x80 if mask else 0
-            
+
             header = b''
-    
+
             if length < 126:  # 126 is magic value to use 2-byte length header
                 byte2 |= length
                 header = struct.pack('!BB', byte1, byte2)
-    
+
             elif length < (1 << 16):  # Length fits in 2-bytes
                 byte2 |= 126  # Magic code
                 header = struct.pack('!BBH', byte1, byte2, length)
-    
+
             elif length < (1 << 64):
                 byte2 |= 127  # Magic code
                 header = struct.pack('!BBQ', byte1, byte2, length)
-    
+
             else:
                 raise ValueError()
-            
+
             # Write header
             await self._awrite(header)
-    
-            if mask:  # Mask is 4 bytes
+
+            if mask:
                 mask_bits = struct.pack('!I', r.getrandbits(32))
                 await self._awrite(mask_bits)
-                
-                # Apply mask to data
-                # Optimization: for small data, this list comp is ok. 
-                # For large data, we might want to chunk it? 
-                # But 'data' is passed as bytes, so we have it all in RAM anyway.
-                masked_data = bytes(b ^ mask_bits[i % 4] for i, b in enumerate(data))
-                await self._awrite(masked_data)
+
+                # Stream-mask without allocating a full copy
+                chunk = 512 if length > 512 else length
+                scratch = bytearray(chunk)
+                mv = memoryview(data)
+                off = 0
+                mb0, mb1, mb2, mb3 = mask_bits[0], mask_bits[1], mask_bits[2], mask_bits[3]
+                while off < length:
+                    n = chunk if (length - off) > chunk else (length - off)
+                    for i in range(n):
+                        bi = mv[off + i]
+                        scratch[i] = bi ^ (mb0 if ((off + i) & 3) == 0 else mb1 if ((off + i) & 3) == 1 else mb2 if ((off + i) & 3) == 2 else mb3)
+                    await self._awrite(scratch[:n])
+                    off += n
             else:
                 await self._awrite(data)
             self.last_activity_ms = time.ticks_ms()

@@ -19,6 +19,7 @@ class WampBridge:
         realm = self.cfg["wamp"].get("realm", "realm1")
         ka = self.cfg.get("wamp", {}).get("keepalive", {})
         hostname = self.cfg["wamp"].get("sni_host")
+        serializer = self.cfg.get("wamp", {}).get("serializer", "msgpack")
 
         # Basic gc before connection
         gc.collect()
@@ -32,6 +33,7 @@ class WampBridge:
             sni_host=hostname,
             ping_interval_s=ka.get("ping_interval_s"),
             idle_timeout_s=ka.get("idle_timeout_s"),
+            serializer=serializer,
         )
 
     def _pfx(self):

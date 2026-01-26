@@ -38,6 +38,9 @@ def _merge(dst, src):
 
 
 def _validate(cfg):
+    wamp = cfg.setdefault("wamp", {})
+    wamp["serializer"] = (wamp.get("serializer") or "msgpack").lower()
+
     flow = cfg.setdefault("flow", {})
     flow["pin"] = int(flow.get("pin", 14))
     flow["calibration"] = int(flow.get("calibration", 5880))
