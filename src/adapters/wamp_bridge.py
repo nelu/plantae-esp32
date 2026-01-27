@@ -19,8 +19,6 @@ class WampBridge:
         realm = self.cfg["wamp"].get("realm", "realm1")
         ka = self.cfg.get("wamp", {}).get("keepalive", {})
         hostname = self.cfg["wamp"].get("sni_host")
-        serializer = self.cfg.get("wamp", {}).get("serializer", "msgpack")
-
         # Basic gc before connection
         gc.collect()
 
@@ -33,7 +31,6 @@ class WampBridge:
             sni_host=hostname,
             ping_interval_s=ka.get("ping_interval_s"),
             idle_timeout_s=ka.get("idle_timeout_s"),
-            serializer=serializer,
         )
 
     def _pfx(self):
@@ -67,34 +64,23 @@ class WampBridge:
         # Add debug logging when connection state changes
         if self._last_alive_state != connected:
             LOG.info("is_alive: state change: %s -> %s", self._last_alive_state, connected)
-            pass
+            if not connected:
+                self.close()
 
         self._last_alive_state = connected
 
-        return connected
+        return connected and self.session_ready
 
-    async def connect(self):
+    async def connect(self, timeout_s=15):
         self.state.wamp_ok = False
         self.session_ready = False
         self.service.indicator.blink()
         LOG.info("connect: url=%s realm=%s", self.client.url, self.client.realm)
 
-        gc.collect()
-
-        # Check if we have a pre-resolved host for SNI (Disabled for standard DNS test)
-        # server_hostname = self.cfg["wamp"].get("original_host")
-
-        # Set up the on_join callback to handle subscriptions/registrations
-        # self.client.on_join(self._on_wamp_join)
-
-        # await self.client.connect()
-        # await asyncio.sleep_ms(100)
-
         try:
+            self.client.on_join(self._on_wamp_join)
+            gc.collect()
             await self.client.connect()
-            gc.collect()
-            await self._on_wamp_join()  # do setup now, no Event/Flag needed
-            gc.collect()
 
         except Exception as e:
             # make sure we drop sockets/refs so GC can reclaim things
@@ -109,14 +95,16 @@ class WampBridge:
                 gc.collect()
             raise
 
+        t0 = time.ticks_ms()
 
-        self.state.wamp_ok = True
-        self.state.last_error = None
-        self.service.indicator.on()
+        while not self.session_ready:
+            await asyncio.sleep_ms(50)
+            if time.ticks_diff(time.ticks_ms(), t0) > int(timeout_s * 1000):
+                raise OSError("WAMP session ready timeout (on_join failed)")
 
-    async def _on_wamp_join(self):
+    async def _on_wamp_join(self, session_id=None):
         """Called when WAMP session is joined - set up subscriptions and registrations"""
-        LOG.info("_on_wamp_join: start")
+        LOG.info("_on_wamp_join: start %s", session_id)
         try:
             await self.client.register(self._topic("control"), self.rpc_control)
             await self.client.register(self._topic("calibrate"), self.rpc_calibrate)
@@ -140,13 +128,15 @@ class WampBridge:
 
             await self.publish_announce("announce.online")
 
-            LOG.info("_on_wamp_join: completed session=%s", getattr(self.client, "_session_id", None))
-            self.session_ready = True
-            self.service.indicator.on()
+            LOG.info("_on_wamp_join: completed session=%s", session_id)
 
+            self.session_ready = True
+            self.state.wamp_ok = True
+            self.state.last_error = None
+            self.service.indicator.on()
             # Start keepalive only after session is fully ready
             # self.client.start_keepalive()
-            
+
             gc.collect()
 
         except Exception as e:
@@ -256,17 +246,15 @@ class WampBridge:
             if not isinstance(dosing_cfg, dict):
                 return {"error": "invalid_payload", "reason": "dosing config must be dict"}
 
-            if "start" not in dosing_cfg or "end" not in dosing_cfg:
-                return {"error": "missing_timeframe", "required": ["start", "end"]}
+            if "start" not in dosing_cfg:
+                return {"error": "missing_field", "required": ["start"]}
 
             new_cfg = {}
 
             start = str(dosing_cfg.get("start", ""))
-            end = str(dosing_cfg.get("end", ""))
-            if ":" not in start or ":" not in end:
-                return {"error": "invalid_timeframe"}
+            if ":" not in start:
+                return {"error": "invalid_time"}
             new_cfg["start"] = start
-            new_cfg["end"] = end
 
             if "quantity" in dosing_cfg:
                 try:
@@ -293,28 +281,28 @@ class WampBridge:
     async def rpc_alert(self, args, kwargs, details):
         """Handle generic alert management"""
         action = kwargs.get("action", "list")
-        
+
         if action == "list":
-             if self.service.stats:
-                 return self.service.stats.data.get("alerts", {})
-             return {}
-             
+            if self.service.stats:
+                return self.service.stats.data.get("alerts", {})
+            return {}
+
         elif action == "clear":
-             kind = kwargs.get("kind")
-             if not kind:
-                 return {"error": "missing_kind"}
-             self.service.clear_alert(kind)
-             return {"status": "cleared", "kind": kind}
+            kind = kwargs.get("kind")
+            if not kind:
+                return {"error": "missing_kind"}
+            self.service.clear_alert(kind)
+            return {"status": "cleared", "kind": kind}
 
         elif action == "set":
-             # Mostly for testing or manual overrides
-             kind = kwargs.get("kind")
-             message = kwargs.get("message", "manual")
-             if not kind:
-                  return {"error": "missing_kind"}
-             self.service.set_alert(kind, message)
-             return {"status": "set", "kind": kind}
-             
+            # Mostly for testing or manual overrides
+            kind = kwargs.get("kind")
+            message = kwargs.get("message", "manual")
+            if not kind:
+                return {"error": "missing_kind"}
+            self.service.set_alert(kind, message)
+            return {"status": "set", "kind": kind}
+
         return {"error": "unknown_action", "action": action}
 
     async def rpc_output(self, args, kwargs, details):

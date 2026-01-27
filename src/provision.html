@@ -31,7 +31,7 @@ const baseConfig = {
   flow: {type: "YFS401", pin: 34, calibration: 5000, read_interval_ms: 1000, pullup_external: true},
   inputs: {pwm_test_btn: {pin: 35, active_low: false, test_duty: 0.5}},
   outputs: {pwm: {pin: 2, freq: 100, active_low: false}},
-  schedule: {tz_offset_min: 120, pwm: [], dosing: {start: "17:00", end: "17:10", output: "pwm", duty: 0.5, quantity: 0.10}}
+  schedule: {tz_offset_min: 120, pwm: [], dosing: {start: "17:00", output: "pwm", duty: 0.5, quantity: 0.1}}
 };
 
 $("f").onsubmit = async e => {

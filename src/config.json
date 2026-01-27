@@ -12,7 +12,6 @@
     "sni_host": "plantae.robits.org",
     "realm": "realm1",
     "prefix": "org.robits.plantae.",
-    "serializer": "msgpack",
     "keepalive": {
       "ping_interval_s": 25,
       "idle_timeout_s": 180
@@ -46,10 +45,9 @@
     ],
     "dosing": {
       "start": "17:00",
-      "end": "17:10",
       "output": "pwm",
       "duty": 0.5,
-      "quantity": 0.10
+      "quantity": 0.1
     }
   }
 }

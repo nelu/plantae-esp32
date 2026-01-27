@@ -3,8 +3,6 @@ import gc
 import time
 
 import uasyncio as asyncio
-import ujson as json
-
 from lib import umsgpack
 
 from lib.async_websocket_client.ws import AsyncWebsocketClient
@@ -43,15 +41,13 @@ class _RPCWaiter:
 class AutobahnWS:
     """WAMP client for MicroPython, transport: WebSocket (ws/wss)."""
 
-    def __init__(self, url, realm, ping_interval_s=30, idle_timeout_s=60, sni_host=None,
-                 serializer="msgpack", allow_json_fallback=True):
+    def __init__(self, url, realm, ping_interval_s=30, idle_timeout_s=60, sni_host=None):
         self.url = url
         self.realm = realm
         self.sni_host = sni_host
         idle_ms = int(idle_timeout_s * 1000) if idle_timeout_s else None
         self._ws = AsyncWebsocketClient(idle_timeout_ms=idle_ms)  # Vovaman client
         self._connected = False
-        self._session_id = None
         self._next_request_id = 1
         self.ping_interval_s = ping_interval_s
         self.idle_timeout_s = idle_timeout_s
@@ -68,59 +64,39 @@ class AutobahnWS:
         self._on_join = None
         self._connect_error = None
 
-        self._allow_json_fallback = allow_json_fallback
-        self._set_serializer(serializer)
-
-    def _set_serializer(self, serializer):
-        ser = (serializer or "json").lower()
-        if ser not in ("json", "msgpack"):
-            ser = "json"
-        self.serializer = ser
-        if ser == "msgpack":
-            self._subprotocol = b"wamp.2.msgpack"
-            self._encode = lambda obj: umsgpack.dumps(obj)
-            self._decode = lambda data: umsgpack.loads(data if isinstance(data, (bytes, bytearray)) else data.encode())
-        else:
-            self._subprotocol = b"wamp.2.json"
-            self._encode = lambda obj: json.dumps(obj)
-            self._decode = lambda data: json.loads(data if isinstance(data, str) else data.decode())
-
-    async def _do_handshake(self):
-        await self._ws.handshake(self.url, headers=[(b"Sec-WebSocket-Protocol", self._subprotocol)],
-                                 sni_host=self.sni_host)
-
-    async def connect(self, timeout_s=10):
+    async def connect(self, handshake_max_attempts=5, handshake_retry_delay_ms=1000):
         self._connected = False
-        self._session_id = None
         self._connect_error = None
 
         # Force the heap to settle to find the largest contiguous block
         gc.collect()
         await asyncio.sleep_ms(100)
         # Connect using the full URL and WAMP subprotocol
-        try:
-            # Vovaman handles SSL internally if the URL starts with wss://
-            await self._do_handshake()
-        except Exception as e:
-            if self.serializer == "msgpack" and self._allow_json_fallback:
-                if LOG: LOG.warning("WAMP: msgpack handshake failed, falling back to JSON: %s", e)
-                self._set_serializer("json")
-                try:
-                    await self._do_handshake()
-                except Exception as e2:
-                    self._connect_error = str(e2)
-                    raise
-            else:
+        attempt = 0
+        while True:
+            attempt += 1
+            gc.collect()
+            await asyncio.sleep_ms(50)
+            try:
+                # Vovaman handles SSL internally if the URL starts with wss://
+                await self._ws.handshake(self.url, headers=[(b"Sec-WebSocket-Protocol", b"wamp.2.msgpack")],
+                                      sni_host=self.sni_host)
+                self._connect_error = None
+                break
+            except Exception as e:
                 self._connect_error = str(e)
-                raise
-        gc.collect()
+                if handshake_max_attempts is not None and attempt >= handshake_max_attempts:
+                    raise
+                await asyncio.sleep_ms(handshake_retry_delay_ms)
 
-        details = {"roles": {"publisher": {}, "subscriber": {}, "caller": {}, "callee": {}}}
-        await self._send_msg([C.HELLO, self.realm, details])
 
         if self._recv_task:
             self._recv_task.cancel()
         self._recv_task = asyncio.create_task(self._recv_loop())
+
+        gc.collect()
+        details = {"roles": {"publisher": {}, "subscriber": {}, "caller": {}, "callee": {}}}
+        await self._send_msg([C.HELLO, self.realm, details])
 
         # if self.ping_interval_s is not None or self.idle_timeout_s is not None:
         #     if self._keepalive_task:
@@ -130,12 +106,6 @@ class AutobahnWS:
         #             pass
         #     self._keepalive_task = asyncio.create_task(self._keepalive_loop())
 
-        t0 = time.ticks_ms()
-        while self._session_id is None and self._connect_error is None:
-            await asyncio.sleep_ms(50)
-            if time.ticks_diff(time.ticks_ms(), t0) > int(timeout_s * 1000):
-                raise OSError("WAMP connect timeout (no WELCOME)")
-
         if self._connect_error is not None:
             raise OSError(self._connect_error)
 
@@ -143,7 +113,7 @@ class AutobahnWS:
 
     def is_connected(self):
         # Vovaman uses .open to indicate the stream is active
-        return bool(self._ws) and self._connected
+        return self._connected
 
     def on_join(self, cb):
         self._on_join = cb
@@ -236,60 +206,38 @@ class AutobahnWS:
     async def _recv_loop(self):
         try:
             while True:
-                if not self._ws or not await self._ws.open():
-                    self._disconnect("socket not open")
-                    break
+                gc.collect()
 
-                if LOG: LOG.debug("awaiting recv...")
-                recv_coro = self._ws.recv()
-                try:
-                    if self.idle_timeout_s:
-                        text = await asyncio.wait_for(recv_coro, self.idle_timeout_s)
-                    else:
-                        text = await recv_coro
-                except AttributeError:
-                    text = await recv_coro
-                except asyncio.TimeoutError:
-                    LOG.warning("recv timeout after %ss mem_free=%d", self.idle_timeout_s, gc.mem_free())
-                    self._disconnect("recv timeout")
-                    break
-                if LOG: LOG.debug("recv returned length: %s", len(text) if text else "None")
-                if hasattr(self._ws, "last_activity_ms"):
+                while await self._ws.open():
+                    LOG.debug("awaiting recv...")
+                    text = await self._ws.recv()
+
+                    if text is None:
+                        open_state = await self._ws.open()
+                        LOG.warning("_recv_loop: Connection closed (recv returned None) mem_free=%d open=%s", gc.mem_free(), open_state)
+                        if not open_state:
+                            raise OSError("recv returned None")
+                        await asyncio.sleep_ms(50)
+                        continue
+
                     try:
-                        idle_ms = time.ticks_diff(time.ticks_ms(), self._ws.last_activity_ms)
-                        #LOG.debug("recv idle since last activity: %d ms", idle_ms)
-                    except Exception:
-                        pass
-                if text is None:
-                    open_state = await self._ws.open()
-                    LOG.warning("WAMP: Connection closed (recv returned None) mem_free=%d open=%s", gc.mem_free(), open_state)
-                    self._disconnect("recv returned None")
-                    break
-
-                try:
-                    msg = self._decode(text)
-                    await self._handle_wamp_message(msg)
-                except Exception as e:
-                    print("WAMP: decode/processing error (%s): %s" % (self.serializer, e))
-                    continue
+                        if isinstance(text, str):
+                            text = text.encode()
+                        msg = umsgpack.loads(text)
+                        await self._handle_wamp_message(msg)
+                    except Exception as e:
+                        print("WAMP: decode/processing error (msgpack): %s" % (e))
+                        continue
 
         except Exception as e:
-            print("WAMP: Recv loop exception: %s" % e)
-            self._disconnect("recv loop exception: %s" % e)
-        finally:
-            # ensure we always mark it disconnected
+            LOG.error("WAMP: _recv_loop exception: %s" % e)
             self._disconnect("WAMP: Recv loop stopped")
-            LOG.warning("WAMP: Recv loop stopped")
-
-    async def send_text(self, data):
-        if not self._ws or not await self._ws.open():
-            self._disconnect("send_text on closed socket")
-            raise OSError("socket closed")
-        await self._ws.send(data)
+            await asyncio.sleep(1)
+            raise
 
     async def _send_msg(self, msg):
-        encoded = self._encode(msg)
-        await self.send_text(encoded)
+        encoded = umsgpack.dumps(msg)
+        sent = await self._ws.send(encoded)
 
     async def send_ping(self, data=b''):
         """Send a low-level WebSocket PING frame."""
@@ -320,7 +268,6 @@ class AutobahnWS:
             self._connect_error = str(reason)
 
         self._connected = False
-        self._session_id = None
 
         exc = OSError(self._connect_error)
 
@@ -380,15 +327,12 @@ class AutobahnWS:
         code = msg[0]
 
         if code == C.WELCOME:
-            self._session_id = msg[1]
             self._connected = True
             if self._on_join:
-                try:
-                    res = self._on_join()
-                    if _is_awaitable(res):
-                        asyncio.create_task(res)
-                except Exception:
-                    pass
+                res = self._on_join(msg[1])
+                if _is_awaitable(res):
+                    asyncio.create_task(res)
+
 
         elif code == C.SUBSCRIBED:
             req_id, sub_id = msg[1], msg[2]
@@ -476,5 +420,4 @@ class AutobahnWS:
         elif code == C.ABORT:
             reason = msg[2] if len(msg) > 2 else "wamp.error.close_realm"
             self._connected = False
-            if not self._session_id:
-                self._connect_error = "WAMP handshake aborted: %s" % reason
+            self._connect_error = "WAMP handshake aborted: %s" % reason

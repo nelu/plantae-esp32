@@ -303,7 +303,7 @@ class Supervisor:
 
         backoff = 1
         ntp_quiet_done = False
-
+        fail_count = 0
         while True:
             if not self.wifi.is_connected():
                 await asyncio.sleep(2)
@@ -322,19 +322,15 @@ class Supervisor:
             try:
                 LOG.info("task_wamp: connect. Signal: %d, Free: %d", self.state.signal, gc.mem_free())
                 gc.collect()
-                # self.wamp = WampBridge(self.cfg, self.state, self.service)
-                #                self.wamp = WampBridge(self.cfg, self.state, None)
 
                 await asyncio.sleep_ms(0)
 
                 await self.wamp.connect()
                 backoff = 1
-                self.fail_count = 0
+
 
                 while self.wamp.is_alive():
-                    # await self.wamp.publish_sense()
-                    if self.wamp.session_ready:
-                        await self.wamp.publish_status()
+                    await self.wamp.publish_status()
                     await asyncio.sleep(1)
                     gc.collect()
 
@@ -362,12 +358,10 @@ class Supervisor:
 
                 gc.collect()
 
-                self.fail_count = getattr(self, 'fail_count', 0) + 1
-                if self.fail_count > 10:
-                    LOG.error("task_wamp: Too many failures (%d). Rebooting...", self.fail_count)
-                    await asyncio.sleep(5)
-                    from machine import reset
-                    reset()
+                fail_count = fail_count + 1
+                if fail_count > 10:
+                    LOG.error("task_wamp: Too many failures (%d). Rebooting...", fail_count)
+                    self.schedule_reboot()
 
                 # If the underlying error was OSError(16), cool down a bit more
                 eno = None

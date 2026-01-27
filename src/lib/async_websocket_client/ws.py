@@ -140,7 +140,7 @@ class AsyncWebsocketClient:
 
         self.last_activity_ms = time.ticks_ms()
 
-        return bytes(buf)
+        return buf
 
     async def handshake(self, uri, headers=[], keyfile=None, certfile=None, cafile=None, cert_reqs=0, sni_host=None):
 
@@ -243,8 +243,12 @@ class AsyncWebsocketClient:
             await self.close(code=CLOSE_TOO_BIG)
             return True, OP_CLOSE, None
 
-        if mask:
-            data = bytes(b ^ mask_bits[i % 4] for i, b in enumerate(data))
+        if mask and data:
+            mv = memoryview(data)
+            mb0, mb1, mb2, mb3 = mask_bits[0], mask_bits[1], mask_bits[2], mask_bits[3]
+            for i in range(len(mv)):
+                mi = mv[i]
+                mv[i] = mi ^ (mb0 if (i & 3) == 0 else mb1 if (i & 3) == 1 else mb2 if (i & 3) == 2 else mb3)
 
         self.last_activity_ms = time.ticks_ms()
         # if LOG:
@@ -254,40 +258,6 @@ class AsyncWebsocketClient:
         #         pass
 
         return fin, opcode, data
-
-    # async def read_frame(self, max_size=None):
-    #     # Frame header
-    #     byte1, byte2 = struct.unpack('!BB', await self.a_read(2))
-    #
-    #     # Byte 1: FIN(1) _(1) _(1) _(1) OPCODE(4)
-    #     fin = bool(byte1 & 0x80)
-    #     opcode = byte1 & 0x0f
-    #
-    #     # Byte 2: MASK(1) LENGTH(7)
-    #     mask = bool(byte2 & (1 << 7))
-    #     length = byte2 & 0x7f
-    #
-    #     if length == 126:  # Magic number, length header is 2 bytes
-    #         length, = struct.unpack('!H', await self.a_read(2))
-    #     elif length == 127:  # Magic number, length header is 8 bytes
-    #         length, = struct.unpack('!Q', await self.a_read(8))
-    #
-    #     if mask:  # Mask is 4 bytes
-    #         mask_bits = await self.a_read(4)
-    #
-    #     try:
-    #         data = await self.a_read(length)
-    #     except MemoryError:
-    #         # We can't receive this many bytes, close the socket
-    #         await self.close(code=CLOSE_TOO_BIG)
-    #         # await self._stream.drain()
-    #         return True, OP_CLOSE, None
-    #
-    #     if mask:
-    #         data = bytes(b ^ mask_bits[i % 4]
-    #                      for i, b in enumerate(data))
-    #
-    #     return fin, opcode, data
 
     async def _awrite(self, data):
         if not data:
