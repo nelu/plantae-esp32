@@ -118,11 +118,9 @@ class AutobahnWS:
     def on_join(self, cb):
         self._on_join = cb
 
-    async def publish(self, topic, args=None, kwargs=None, acknowledge=False, options=None):
+    async def publish(self, topic, args=None, kwargs=None, options=None):
         request_id = self._next_id()
         opts = options or {}
-        if acknowledge:
-            opts["acknowledge"] = True
 
         msg = [C.PUBLISH, request_id, opts, topic]
         if args is not None or kwargs is not None:
@@ -132,7 +130,7 @@ class AutobahnWS:
                 msg.append([])
             msg.append(kwargs)
 
-        if acknowledge:
+        if opts.get("acknowledge"):
             waiter = _RPCWaiter()
             self._pending_publishes[request_id] = waiter
             try:

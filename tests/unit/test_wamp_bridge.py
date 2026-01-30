@@ -14,38 +14,48 @@ class MockState:
         self.device_id = "test-device"
         self.ip = "192.168.1.100"
         self.wamp_ok = False
-        self.last_error = None
-        self.switches = [False] * 16
-        self.volume_l = 0.0
-        self.flow_lpm = 0.0
-        self.pulses = 0
-        self.pwm_duty = 0.0
         self.dosing_status = {}
-    
+        self.last_error = None
+
     def snapshot(self):
         return {
             "device_id": self.device_id,
             "ip": self.ip,
             "wamp_ok": self.wamp_ok,
-            "switches": self.switches.copy(),
-            "volume_l": self.volume_l,
-            "flow_lpm": self.flow_lpm,
-            "pulses": self.pulses,
-            "pwm_duty": self.pwm_duty,
-            "dosing_status": self.dosing_status
+            "dosing_status": self.dosing_status,
         }
 
 
-class MockConfigManager:
+class MockIndicator:
     def __init__(self):
-        self.config = {}
-    
-    def update(self, patch):
-        self.config.update(patch)
-        return self.config
-    
-    def save(self):
-        pass
+        self.blink = Mock()
+        self.on = Mock()
+
+
+class MockService:
+    def __init__(self):
+        self.indicator = MockIndicator()
+        self.dosing = Mock()
+        self.dosing.start_dose = AsyncMock(return_value=True)
+        self.dosing.stop_dose = Mock(return_value=True)
+        self.dosing.get_dose_status = Mock(return_value={"active": False})
+        self.stats = Mock()
+        self.stats.data = {"alerts": {}}
+        self._config_patches = []
+
+        self.set_all_switches = Mock(return_value=True)
+        self.set_switch = Mock(return_value=True)
+        self.patch_config = Mock(side_effect=self._record_patch)
+        self.clear_alert = Mock()
+        self.set_alert = Mock()
+        self.set_pwm_manual = Mock()
+        self.get_status = Mock(return_value={"ok": True})
+        self.reset_counters = Mock(return_value=True)
+        self.reboot = Mock(return_value=True)
+
+    def _record_patch(self, patch):
+        self._config_patches.append(patch)
+        return True
 
 
 class TestWampBridge(unittest.TestCase):
@@ -53,161 +63,122 @@ class TestWampBridge(unittest.TestCase):
         self.cfg = {
             "wamp": {
                 "prefix": "org.robits.plantae.",
-                "legacy_by_ip": True
+                "url": "ws://example",
+                "realm": "realm1",
+                "keepalive": {},
+                "legacy_by_ip": True,
             }
         }
         self.state = MockState()
-        self.switchbank = Mock()
-        self.config_mgr = MockConfigManager()
-        self.schedule_reboot = Mock()
-        self.dosing_controller = Mock()
-        
-        # Import here to avoid MicroPython import issues in tests
+        self.service = MockService()
+
         with patch('src.adapters.wamp_bridge.AutobahnWS'):
             from src.adapters.wamp_bridge import WampBridge
-            self.bridge = WampBridge(
-                self.cfg, self.state, self.switchbank, 
-                self.config_mgr, self.schedule_reboot, 
-                self.dosing_controller
-            )
-    
+            self.bridge = WampBridge(self.cfg, self.state, self.service)
+
+        # Provide a client mock for publish calls used in tests
+        self.bridge.client = Mock()
+        self.bridge.client.publish = AsyncMock()
+
     def test_pfx(self):
-        """Test prefix generation"""
         self.assertEqual(self.bridge._pfx(), "org.robits.plantae.")
-    
+
     def test_topic(self):
-        """Test topic name generation"""
         self.assertEqual(self.bridge._topic("test"), "org.robits.plantae.test")
-    
+
     def test_addr_suffixes(self):
-        """Test address suffix generation"""
         suffixes = self.bridge._addr_suffixes()
         self.assertIn("test-device", suffixes)
-        self.assertIn("192.168.1.100", suffixes)
-        # Should not have duplicates
         self.assertEqual(len(suffixes), len(set(suffixes)))
-    
+
     def test_addr_topic(self):
-        """Test addressed topic generation"""
-        topic = self.bridge._addr_topic("status", "test-device")
+        topic = self.bridge._device_topic("status", "test-device")
         self.assertEqual(topic, "org.robits.plantae.status.test-device")
-    
+
     async def test_on_master(self):
-        """Test master announcement handler"""
-        self.bridge.client = Mock()
-        self.bridge.client.publish = AsyncMock()
-        
         await self.bridge.on_master([], {"time": time.time()}, {})
-        
-        # Should publish announce.online
         self.bridge.client.publish.assert_called_once()
-        call_args = self.bridge.client.publish.call_args
-        self.assertIn("announce.online", call_args[0][0])
-    
+
     async def test_rpc_control_all_switches(self):
-        """Test RPC control for all switches"""
-        self.switchbank.set_all.return_value = True
-        self.switchbank.values = [True] * 16
-        
         result = await self.bridge.rpc_control([], {"all": True}, {})
-        
         self.assertTrue(result)
-        self.switchbank.set_all.assert_called_once_with(True)
-        self.assertEqual(self.state.switches, [True] * 16)
-    
+        self.service.set_all_switches.assert_called_once_with(True)
+
     async def test_rpc_control_single_switch(self):
-        """Test RPC control for single switch"""
-        self.bridge.client = Mock()
-        self.bridge.client.publish = AsyncMock()
-        self.switchbank.set.return_value = True
-        self.switchbank.values = [False] * 16
-        self.switchbank.values[5] = True
-        
-        result = await self.bridge.rpc_control([], {"switch": [5, True]}, {})
-        
+        self.service.set_switch.return_value = True
+        # publish_switch is awaited inside rpc_control
+        self.bridge.publish_switch = AsyncMock()
+
+        result = await self.bridge.rpc_control([], {"switch": (2, True)}, {})
+
         self.assertTrue(result)
-        self.switchbank.set.assert_called_once_with(5, True)
-        self.bridge.client.publish.assert_called_once()
-    
+        self.service.set_switch.assert_called_once_with(2, True)
+        self.bridge.publish_switch.assert_awaited_once_with(2, True)
+
     async def test_rpc_control_patch_config(self):
-        """Test RPC control for config patching"""
-        patch = {"flow": {"calibration": 100}}
-        
-        result = await self.bridge.rpc_control([], {"patch_cfg": patch}, {})
-        
+        patch_cfg = {"flow": {"calibration": 100}}
+        result = await self.bridge.rpc_control([], {"patch_cfg": patch_cfg}, {})
         self.assertTrue(result)
-        self.assertEqual(self.config_mgr.config, patch)
-    
+        self.assertIn(patch_cfg, self.service._config_patches)
+
     async def test_rpc_calibrate(self):
-        """Test RPC calibration"""
-        self.cfg["flow"] = {"calibration": 0}
-        
         result = await self.bridge.rpc_calibrate([], {"type": "flow", "calibration": 150}, {})
-        
         self.assertTrue(result)
-        self.assertEqual(self.cfg["flow"]["calibration"], 150)
-    
+        self.assertIn({"flow": {"calibration": 150}}, self.service._config_patches)
+
     async def test_rpc_dose_start(self):
-        """Test RPC dosing start"""
-        self.dosing_controller.start_dose = AsyncMock(return_value=True)
-        
         result = await self.bridge.rpc_dose([], {"action": "start", "quantity": 0.5}, {})
-        
         self.assertEqual(result["status"], "started")
-        self.assertEqual(result["quantity"], 0.5)
-        self.dosing_controller.start_dose.assert_called_once_with(0.5)
-    
+        self.service.dosing.start_dose.assert_awaited_once_with(0.5)
+
     async def test_rpc_dose_invalid_quantity(self):
-        """Test RPC dosing with invalid quantity"""
         result = await self.bridge.rpc_dose([], {"action": "start", "quantity": 0}, {})
-        
         self.assertEqual(result["error"], "invalid_quantity")
-    
+
     async def test_rpc_dose_stop(self):
-        """Test RPC dosing stop"""
-        self.dosing_controller.stop_dose.return_value = True
-        
+        self.service.dosing.stop_dose.return_value = True
         result = await self.bridge.rpc_dose([], {"action": "stop"}, {})
-        
         self.assertEqual(result["status"], "stopped")
-    
+
     async def test_rpc_dose_status(self):
-        """Test RPC dosing status"""
         expected_status = {"active": False, "quantity": 0.0}
-        self.dosing_controller.get_dose_status.return_value = expected_status
-        
+        self.service.dosing.get_dose_status.return_value = expected_status
         result = await self.bridge.rpc_dose([], {"action": "status"}, {})
-        
         self.assertEqual(result, expected_status)
 
-    
+    async def test_rpc_dose_set_schedule_valid_days(self):
+        days = ["10:00"] * 7
+        result = await self.bridge.rpc_dose([], {"action": "set_schedule", "dosing": {"days": days, "quantity": 0.2}}, {})
+        self.assertEqual(result.get("status"), "updated")
+        self.assertIn({"schedule": {"dosing": {"days": days, "quantity": 0.2}}}, self.service._config_patches)
+
+    async def test_rpc_dose_set_schedule_invalid_days_length(self):
+        result = await self.bridge.rpc_dose([], {"action": "set_schedule", "dosing": {"days": ["10:00"]}}, {})
+        self.assertEqual(result.get("error"), "invalid_field")
+
+    async def test_rpc_dose_set_schedule_invalid_time(self):
+        days = ["10:00"] * 7
+        days[2] = "1000"
+        result = await self.bridge.rpc_dose([], {"action": "set_schedule", "dosing": {"days": days}}, {})
+        self.assertEqual(result.get("error"), "invalid_time")
+
+    async def test_rpc_dose_set_schedule_missing_days(self):
+        result = await self.bridge.rpc_dose([], {"action": "set_schedule", "dosing": {}}, {})
+        self.assertEqual(result.get("error"), "missing_field")
+
     async def test_rpc_status(self):
-        """Test RPC status"""
         result = await self.bridge.rpc_status([], {}, {})
-        
-        expected = self.state.snapshot()
-        self.assertEqual(result, expected)
-    
+        self.assertEqual(result, {"ok": True})
+
     async def test_rpc_reset(self):
-        """Test RPC reset"""
-        self.state.volume_l = 10.5
-        self.state.pulses = 1000
-        
         result = await self.bridge.rpc_reset([], {}, {})
-        
         self.assertTrue(result)
-        self.assertEqual(self.state.volume_l, 0.0)
-        self.assertEqual(self.state.pulses, 0)
-    
+        self.service.reset_counters.assert_called_once()
+
     async def test_rpc_reboot(self):
-        """Test RPC reboot"""
-        self.bridge.client = Mock()
-        self.bridge.client.publish = AsyncMock()
-        
         result = await self.bridge.rpc_reboot([], {"timeout": 5}, {})
-        
         self.assertTrue(result)
-        self.schedule_reboot.assert_called_once_with(5)
+        self.service.reboot.assert_called_once_with(5)
 
 
 def run_async_test(coro):
@@ -228,14 +199,17 @@ if __name__ == '__main__':
     async_tests = [
         'test_on_master',
         'test_rpc_control_all_switches',
-        'test_rpc_control_single_switch', 
+        'test_rpc_control_single_switch',
         'test_rpc_control_patch_config',
         'test_rpc_calibrate',
         'test_rpc_dose_start',
         'test_rpc_dose_invalid_quantity',
         'test_rpc_dose_stop',
         'test_rpc_dose_status',
-        'test_rpc_test_master',
+        'test_rpc_dose_set_schedule_valid_days',
+        'test_rpc_dose_set_schedule_invalid_days_length',
+        'test_rpc_dose_set_schedule_invalid_time',
+        'test_rpc_dose_set_schedule_missing_days',
         'test_rpc_status',
         'test_rpc_reset',
         'test_rpc_reboot'

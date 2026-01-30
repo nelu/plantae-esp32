@@ -47,25 +47,24 @@
       "pwm_freq": 1000
     }
   },
-  "schedule": {
-    "tz_offset_min": 120,
-    "pwm": [
-      {
-        "start": "20:00",
+    "schedule": {
+      "tz_offset_min": 120,
+      "pwm": [
+        {
+          "start": "20:00",
         "end": "20:10",
         "duty": 0.5,
         "interval": 100,
         "time_on": 10
+        }
+      ],
+      "dosing": {
+        "days": ["17:00", "17:00", "17:00", "17:00", "17:00", "17:00", "17:00"],
+        "output": "pwm",
+        "duty": 0.5,
+        "quantity": 0.25
       }
-    ],
-    "dosing": {
-      "start": "17:00",
-      "end": "17:10",
-      "output": "pwm",
-      "duty": 0.5,
-      "quantity": 0.25
-    }
-  },
+    },
   "logging": {
     "level": "DEBUG",
     "loggers": {

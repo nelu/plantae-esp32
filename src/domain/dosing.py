@@ -1,9 +1,10 @@
 import time
+import uasyncio as asyncio
 
 from lib.logging import LOG
 
 class DosingController:
-    def __init__(self, flow_sensor, output_controller, config, state=None, stats=None):
+    def __init__(self, flow_sensor, output_controller, config, state=None, stats=None, activity_update=None):
         self.flow_sensor = flow_sensor
         self.output_controller = output_controller
         self.config = config
@@ -14,26 +15,36 @@ class DosingController:
         self.target_quantity = 0.0
         self.dose_start_time = 0
         self.timeout_s = 60  # 5 minute timeout for safety
-        self.last_auto_dose_day = stats.last_dose_day() if stats else -1  # Track daily auto-dosing
+        self.tz_offset_min = int(self.config.get("schedule", {}).get("tz_offset_min", 0))
+        self.last_auto_dose_day = -1  # Track daily auto-dosing (local day)
+        self.activity_update = activity_update
+        if self.stats:
+            try:
+                ts = int(self.stats.data.get("last_dose_ts", 0) or 0)
+                self.last_auto_dose_day = self._ts_to_local_day(ts) if ts > 0 else -1
+            except Exception:
+                self.last_auto_dose_day = -1
         
     def _parse_time(self, time_str):
         """Parse HH:MM format to minutes since midnight"""
         h, m = time_str.split(":")
         return int(h) * 60 + int(m)
-    
-    def _is_dosing_time(self, local_minutes):
-        """Check if current time is within dosing window"""
-        dosing_cfg = self.config.get("schedule", {}).get("dosing", {})
-        if not dosing_cfg:
-            return False
-            
-        start_min = self._parse_time(dosing_cfg.get("start", "20:07"))
-        end_min = self._parse_time(dosing_cfg.get("end", "20:10"))
-        
-        return start_min <= local_minutes < end_min
+
+    def _local_wday(self):
+        """Return local weekday index (Mon=0..Sun=6) using tz offset"""
+        t = time.time() + self.tz_offset_min * 60
+        lt = time.localtime(t)
+        return int(lt[6])
+
+    def _current_local_day(self):
+        """Day number since epoch in local time (tz adjusted)"""
+        return int((time.time() + self.tz_offset_min * 60) // 86400)
+
+    def _ts_to_local_day(self, ts):
+        return int((int(ts) + self.tz_offset_min * 60) // 86400)
     
     async def start_dose(self, quantity_l, is_manual=False):
-        """Start dosing a specific quantity in liters"""
+        """Start dosing a specific quantity in milliliters"""
         if self.is_dosing:
             LOG.warning("Dosing already in progress")
             return False
@@ -58,6 +69,7 @@ class DosingController:
         if self.state:
             self.state.pwm_duty = output_duty
 
+        self.notify_status()
         LOG.info("Started dosing %.3f L (start_volume=%.3f L) %s duty %.3f",
                  self.target_quantity, self.dose_start_volume, 
                  "(manual)" if is_manual else "(auto)", output_duty)
@@ -78,6 +90,8 @@ class DosingController:
         
         LOG.info("Stopped dosing: target=%.3f L, actual=%.3f L, duration=%.1f s", 
                  self.target_quantity, dosed_volume, duration)
+        self.notify_status()
+
         return True
     
     def get_dose_status(self):
@@ -102,8 +116,17 @@ class DosingController:
             "remaining_l": remaining,
             "duration_s": duration
         }
-    
-    async def update(self, local_minutes):
+
+    def notify_status(self):
+        if not self.activity_update:
+            return
+        try:
+            asyncio.create_task(self.activity_update())
+            #asyncio.create_task(self.activity_update({'dosing': self.get_dose_status()}))
+        except Exception as e:
+            LOG.error("notify_activity failed: %s", e)
+
+    async def update(self, local_minutes, wamp=None):
         """Update dosing state - call this regularly from main loop"""
         # Check for automatic dosing
         await self._check_auto_dose(local_minutes)
@@ -125,43 +148,47 @@ class DosingController:
         if dosed_volume >= self.target_quantity:
             LOG.info("Dosing complete: %.3f L in %.1f seconds", 
                      dosed_volume, duration)
+
             if not self._is_manual_dose and self.stats:
                 self.stats.record_dose(time.time(), persist_immediately=True)
-                self.last_auto_dose_day = self.stats.last_dose_day()
+                self.last_auto_dose_day = self._current_local_day()
             self.stop_dose()
             return
             
-        # Check if we're outside dosing window (safety)
-        if not self._is_manual_dose and not self._is_dosing_time(local_minutes):
-            LOG.warning("Stopping dosing - outside time window")
-            self.stop_dose()
-            return
-    
     async def _check_auto_dose(self, local_minutes):
         """Check if we should start automatic dosing"""
         if self.is_dosing:  # Don't auto-dose if already dosing
             return
             
         dosing_cfg = self.config.get("schedule", {}).get("dosing", {})
-        if not dosing_cfg or not dosing_cfg.get("quantity", 0):
+        days = dosing_cfg.get("days") or []
+        if not isinstance(days, list) or len(days) != 7:
             return
-            
-        # Only dose once per day
-        current_day = int(time.time() // 86400)  # Days since epoch
+
+        current_day = self._current_local_day()
         if self.last_auto_dose_day >= 0 and current_day <= self.last_auto_dose_day:
             return
-            
-        # Check if we're at the start of the dosing window
-        start_min = self._parse_time(dosing_cfg.get("start", "20:00"))
-        if abs(local_minutes - start_min) <= 1:  # Within 1 minute of start time
-            quantity = float(dosing_cfg.get("quantity", 0))
-            if quantity > 0:
-                if self.stats:
-                    alert = self.stats.get_alert("dosing")
-                    if alert:
-                        LOG.error("Automatic dosing blocked: alert active (%s)", alert.get("message", ""))
-                        return
-                success = await self.start_dose(quantity)
-                if success:
-                    self.last_auto_dose_day = current_day
-                    LOG.info("Started automatic daily dose: %.3f L", quantity)
+
+        day_idx = self._local_wday()
+        start_str = days[day_idx]
+        if not start_str:
+            return
+
+        try:
+            start_min = self._parse_time(str(start_str))
+        except Exception:
+            LOG.error("Invalid dosing time for day %d: %s", day_idx, start_str)
+            return
+
+        if local_minutes >= start_min:
+            quantity = float(dosing_cfg.get("quantity", 0) or 0)
+            if quantity <= 0:
+                return
+            if self.stats:
+                alert = self.stats.get_alert("dosing")
+                if alert:
+                    return
+            success = await self.start_dose(quantity)
+            if success:
+                self.last_auto_dose_day = current_day
+                LOG.info("Started automatic daily dose: %.3f L", quantity)

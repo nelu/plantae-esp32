@@ -33,26 +33,12 @@ class WampBridge:
             idle_timeout_s=ka.get("idle_timeout_s"),
         )
 
-    def _pfx(self):
-        return self.cfg["wamp"].get("prefix", "org.robits.plantae.")
-
     def _topic(self, name):
-        return self._pfx() + name
+        return self.cfg["wamp"].get("prefix", "") + name
 
-    def _addr_suffixes(self):
-        out = [self.state.device_id]
-        # if self.cfg["wamp"].get("legacy_by_ip", True):
-        #     out.append(self.state.ip)
-        seen = set()
-        uniq = []
-        for x in out:
-            if x and x not in seen:
-                uniq.append(x)
-                seen.add(x)
-        return uniq
-
-    def _addr_topic(self, base_name, suffix):
-        return self._pfx() + ("%s.%s" % (base_name, suffix))
+    def _device_topic(self, topic_name, suffix=None):
+        suffix = suffix or self.state.device_id
+        return self._topic(topic_name + "." + suffix)
 
     def is_alive(self):
         """
@@ -105,24 +91,16 @@ class WampBridge:
     async def _on_wamp_join(self, session_id=None):
         """Called when WAMP session is joined - set up subscriptions and registrations"""
         LOG.info("_on_wamp_join: start %s", session_id)
+
         try:
-            await self.client.register(self._topic("control"), self.rpc_control)
-            await self.client.register(self._topic("calibrate"), self.rpc_calibrate)
-            await self.client.register(self._topic("dose"), self.rpc_dose)
-            await self.client.register(self._topic("alert"), self.rpc_alert)
-            await self.client.register(self._topic("output"), self.rpc_output)
-            await self.client.register(self._topic("status"), self.rpc_status)
-
-            await self.client.register(self._topic("restart"), self.rpc_reboot)
-
-            for suf in self._addr_suffixes():
-                await self.client.register(self._addr_topic("calibrate", suf), self.rpc_calibrate)
-                await self.client.register(self._addr_topic("dose", suf), self.rpc_dose)
-                await self.client.register(self._addr_topic("alert", suf), self.rpc_alert)
-                await self.client.register(self._addr_topic("output", suf), self.rpc_output)
-                await self.client.register(self._addr_topic("status", suf), self.rpc_status)
-                # await self.client.register(self._addr_topic("restart", suf), self.rpc_reboot)
-                await self.client.register(self._addr_topic("reset", suf), self.rpc_reset)
+            await self.client.register(self._device_topic("control"), self.rpc_calibrate)
+            await self.client.register(self._device_topic("calibrate"), self.rpc_calibrate)
+            await self.client.register(self._device_topic("dose"), self.rpc_dose)
+            await self.client.register(self._device_topic("alert"), self.rpc_alert)
+            await self.client.register(self._device_topic("output"), self.rpc_output)
+            await self.client.register(self._device_topic("status"), self.rpc_status)
+            await self.client.register(self._device_topic("restart"), self.rpc_reboot)
+            await self.client.register(self._device_topic("reset"), self.rpc_reset)
 
             await self.client.subscribe(self._topic("announce.master"), self.on_master)
 
@@ -181,27 +159,32 @@ class WampBridge:
         if exclude_me is not None:
             options["exclude_me"] = exclude_me
 
-        pub_id = await self.client.publish(self._topic(topic_name), kwargs=payload, acknowledge=True, options=options)
+        options["acknowledge"] = True
+
+        pub_id = await self.client.publish(self._topic(topic_name), kwargs=payload, options=options)
         # LOG.debug("Announce published: %s pub_id=%s", topic_name, pub_id)
+
+    async def publish_activity(self, payload):
+        if not self.is_alive(): return
+        await self.publish_device_topic("activity", payload=payload)
 
     async def publish_switch(self, idx, on):
         if not self.client: return
         await self.client.publish(self._topic("switch"), args=[int(idx), int(bool(on))])
 
-    async def publish_sense(self):
-        if not self.client: return
-        payload = {"sense": 0, "data": [round(self.state.volume_l, 2), round(self.state.flow_lpm, 2)]}
-        for suf in self._addr_suffixes():
-            await self.client.publish(self._addr_topic("sense", suf), kwargs=payload)
+    async def publish_topic(self, topic, payload, options=None):
+        if not self.is_alive(): return
+        await self.client.publish(self._topic(topic), kwargs=payload, options=options)
 
-    async def publish_status(self):
+    async def publish_device_topic(self, topic, payload):
+        if not self.is_alive(): return
+        await self.client.publish(self._device_topic(topic), kwargs=payload)
+
+    async def publish_status(self, **kwargs):
         # LOG.debug("publish_status")
-
-        if not self.client: return
-        snap = self.state.snapshot()
-        for suf in self._addr_suffixes():
-            await self.client.publish(self._addr_topic("status", suf), kwargs=snap)
-            await asyncio.sleep(0.1)
+        if not self.is_alive(): return
+        await self.publish_device_topic("status", payload=self.state.snapshot())
+        await asyncio.sleep(0.1)
 
     async def on_master(self, args, kwargs, details):
         await self.publish_announce("announce.online")
@@ -246,15 +229,26 @@ class WampBridge:
             if not isinstance(dosing_cfg, dict):
                 return {"error": "invalid_payload", "reason": "dosing config must be dict"}
 
-            if "start" not in dosing_cfg:
-                return {"error": "missing_field", "required": ["start"]}
-
             new_cfg = {}
 
-            start = str(dosing_cfg.get("start", ""))
-            if ":" not in start:
-                return {"error": "invalid_time"}
-            new_cfg["start"] = start
+            if "days" not in dosing_cfg:
+                return {"error": "missing_field", "required": ["days"]}
+
+            days = dosing_cfg.get("days")
+            if not isinstance(days, list) or len(days) != 7:
+                return {"error": "invalid_field", "field": "days", "reason": "must_be_list_len_7"}
+
+            parsed_days = []
+            for idx, entry in enumerate(days):
+                if entry in (None, "", False):
+                    parsed_days.append("")
+                    continue
+                s = str(entry)
+                if ":" not in s:
+                    return {"error": "invalid_time", "day_index": idx}
+                parsed_days.append(s)
+
+            new_cfg["days"] = parsed_days
 
             if "quantity" in dosing_cfg:
                 try:

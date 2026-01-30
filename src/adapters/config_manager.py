@@ -5,9 +5,9 @@ import ujson as json
 DEFAULT = {
     "wifi": {"ssid": "", "password": ""},
     "wamp": {
-        "url": "wss://plantae.robits.org/ws",
-        "realm": "realm1",
-        "prefix": "org.robits.plantae.",
+        "url": "wss://tswin.plantae.robits.org/ws",
+        "realm": "none",
+        "prefix": "none.",
         "keepalive": {
             "ping_interval_s": 25,
             "idle_timeout_s": 180

@@ -30,4 +30,4 @@ class Logger:
     def error(self, m, *a): self._log(ERROR, m, *a)
 
 
-LOG = Logger("root", DEBUG)
+LOG = Logger("root", INFO)

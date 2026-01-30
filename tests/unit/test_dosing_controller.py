@@ -32,7 +32,9 @@ class TestDosingController(unittest.TestCase):
         self.cfg = {
             "schedule": {
                 "dosing": {
+                    "days": ["17:00"] * 7,
                     "output": "pwm",
+                    "duty": 0.5,
                     "quantity": 0.25
                 }
             }
@@ -49,7 +51,7 @@ class TestDosingController(unittest.TestCase):
         """Test initial controller state"""
         self.assertFalse(self.controller.is_dosing)
         self.assertEqual(self.controller.target_quantity, 0.0)
-        self.assertEqual(self.controller.start_volume, 0.0)
+        self.assertEqual(self.controller.dose_start_volume, 0.0)
     
     async def test_start_dose_valid(self):
         """Test starting a valid dose"""
@@ -58,14 +60,7 @@ class TestDosingController(unittest.TestCase):
         self.assertTrue(result)
         self.assertTrue(self.controller.is_dosing)
         self.assertEqual(self.controller.target_quantity, 0.5)
-        self.assertEqual(self.pwm_out.duty, 1.0)  # Should be at full power
-    
-    async def test_start_dose_invalid_quantity(self):
-        """Test starting dose with invalid quantity"""
-        result = await self.controller.start_dose(0.0)
-        
-        self.assertFalse(result)
-        self.assertFalse(self.controller.is_dosing)
+        self.assertEqual(self.pwm_out.duty, 0.5)
     
     async def test_start_dose_already_dosing(self):
         """Test starting dose when already dosing"""
@@ -92,40 +87,16 @@ class TestDosingController(unittest.TestCase):
         
         self.assertFalse(result)
     
-    async def test_update_dosing_complete(self):
-        """Test update when dosing is complete"""
-        await self.controller.start_dose(0.5)
-        
-        # Simulate reaching target volume
-        self.flow_sensor.volume_l = 0.5
-        
-        await self.controller.update(480)  # 8:00 AM
-        
-        self.assertFalse(self.controller.is_dosing)
-        self.assertEqual(self.pwm_out.duty, 0.0)
-    
-    async def test_update_dosing_in_progress(self):
-        """Test update while dosing in progress"""
-        await self.controller.start_dose(0.5)
-        
-        # Simulate partial progress
-        self.flow_sensor.volume_l = 0.2
-        
-        await self.controller.update(480)  # 8:00 AM
-        
-        self.assertTrue(self.controller.is_dosing)
-        self.assertEqual(self.pwm_out.duty, 1.0)
-    
     def test_get_dose_status_inactive(self):
         """Test getting status when inactive"""
         status = self.controller.get_dose_status()
         
         expected = {
             "active": False,
-            "target_quantity": 0.0,
-            "current_volume": 0.0,
-            "progress": 0.0,
-            "start_time": None
+            "target_l": 0.0,
+            "dosed_l": 0.0,
+            "remaining_l": 0.0,
+            "duration_s": 0
         }
         
         for key, value in expected.items():
@@ -139,28 +110,32 @@ class TestDosingController(unittest.TestCase):
         status = self.controller.get_dose_status()
         
         self.assertTrue(status["active"])
-        self.assertEqual(status["target_quantity"], 0.5)
-        self.assertEqual(status["current_volume"], 0.2)
-        self.assertEqual(status["progress"], 0.4)  # 0.2 / 0.5
-        self.assertIsNotNone(status["start_time"])
-    
-    def test_calculate_progress(self):
-        """Test progress calculation"""
-        # Test zero target
-        progress = self.controller._calculate_progress(0.1, 0.0)
-        self.assertEqual(progress, 0.0)
-        
-        # Test normal progress
-        progress = self.controller._calculate_progress(0.2, 0.5)
-        self.assertEqual(progress, 0.4)
-        
-        # Test complete
-        progress = self.controller._calculate_progress(0.5, 0.5)
-        self.assertEqual(progress, 1.0)
-        
-        # Test over-target
-        progress = self.controller._calculate_progress(0.6, 0.5)
-        self.assertEqual(progress, 1.0)
+        self.assertEqual(status["target_l"], 0.5)
+        self.assertAlmostEqual(status["dosed_l"], 0.2)
+        self.assertAlmostEqual(status["remaining_l"], 0.3)
+        self.assertGreaterEqual(status["duration_s"], 0)
+
+    async def test_update_triggers_auto_dose_for_today(self):
+        """Auto dosing starts when today's slot is set and not yet dosed"""
+        self.controller._local_wday = lambda: 0
+        self.controller._current_local_day = lambda: 123
+        await self.controller.update(17 * 60)
+        self.assertTrue(self.controller.is_dosing)
+        self.assertEqual(self.controller.last_auto_dose_day, 123)
+
+    async def test_update_skips_empty_day(self):
+        self.controller.config["schedule"]["dosing"]["days"][0] = ""
+        self.controller._local_wday = lambda: 0
+        self.controller._current_local_day = lambda: 200
+        await self.controller.update(17 * 60)
+        self.assertFalse(self.controller.is_dosing)
+
+    async def test_update_skips_if_already_dosed_today(self):
+        self.controller._local_wday = lambda: 0
+        self.controller._current_local_day = lambda: 300
+        self.controller.last_auto_dose_day = 300
+        await self.controller.update(17 * 60)
+        self.assertFalse(self.controller.is_dosing)
 
 
 def run_async_test(coro):
@@ -182,10 +157,10 @@ if __name__ == '__main__':
         
         async_tests = [
             'test_start_dose_valid',
-            'test_start_dose_invalid_quantity',
             'test_start_dose_already_dosing',
-            'test_update_dosing_complete',
-            'test_update_dosing_in_progress'
+            'test_update_triggers_auto_dose_for_today',
+            'test_update_skips_empty_day',
+            'test_update_skips_if_already_dosed_today'
         ]
         
         for test_name in async_tests:

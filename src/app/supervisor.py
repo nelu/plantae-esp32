@@ -67,6 +67,7 @@ class Supervisor:
         )
         if self.is_provisioning:
             self.service.indicator.blink(freq_hz=3)
+
         self.wamp = WampBridge(self.cfg, self.state, self.service)
 
         gc.collect()
@@ -140,7 +141,12 @@ class Supervisor:
         self.service.flow = FlowSensor(ppl, fcfg.get("pin", 34))
         self.service.flow.begin(pullup=bool(fcfg.get("pullup_external", True)))
         # refactor this instantiation into service
-        self.service.dosing = DosingController(self.service.flow, self.service.pwm, self.cfg, state=self.state, stats=self.stats)
+        self.service.dosing = DosingController(self.service.flow,
+                                               self.service.pwm,
+                                               self.cfg,
+                                               state=self.state,
+                                               stats=self.stats,
+                                               activity_update=self.wamp.publish_status)
         # self.service.switches = self.switchbank
 
     async def task_wifi_status(self):

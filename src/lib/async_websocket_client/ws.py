@@ -361,10 +361,6 @@ class AsyncWebsocketClient:
                 # if LOG: LOG.warning("ws: EOF in recv: %s", ex)
                 await self.open(False)
                 return
-            except TimeoutError as ex:
-                # if LOG: LOG.warning("ws: Timeout in recv: %s", ex)
-                await self.open(False)
-                return
             except Exception as ex:
                 # if LOG: LOG.error("ws: Exception in recv: %s", ex)
                 try:
