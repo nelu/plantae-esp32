@@ -7,47 +7,39 @@ from lib.logging import LOG
 
 
 class Supervisor:
-    def __init__(self, config_path="config.json", boot_ctx=None):
+    def __init__(self):
         from domain.state import DeviceState
         from adapters.config_manager import ConfigManager
-        from app.device_id import get_device_id
         from domain.device_service import DeviceService
         from adapters.wamp_bridge import WampBridge
         from domain.stats import StatsManager
 
-        boot_ctx = boot_ctx or {}
+        self.cfg_mgr = ConfigManager()
+        self.cfg_mgr.load()
 
-        self.cfg_mgr = boot_ctx.get("cfg_mgr") if boot_ctx else None
-        if not self.cfg_mgr:
-            self.cfg_mgr = ConfigManager(config_path)
-
-        self.cfg = boot_ctx.get("cfg") if boot_ctx else None
-        if not self.cfg:
-            self.cfg = self.cfg_mgr.load()
-
-        self.stats = StatsManager("stats.json")
+        self.stats = StatsManager()
         stats_data = self.stats.load()
 
-        self.device_id = boot_ctx.get("device_id") if boot_ctx else None
-        if not self.device_id:
-            self.device_id = get_device_id(self.cfg)
-        self.state = DeviceState(self.device_id, stats_data)
+        self.state = DeviceState(self.cfg_mgr.device_id, stats_data)
         self.stats.attach_state(self.state)
 
-        wifi_cfg = self.cfg.get("wifi") or {}
-        ssid = (wifi_cfg.get("ssid") or "").strip()
-        self.is_provisioning = boot_ctx.get("is_provisioning") if boot_ctx else None
-        if self.is_provisioning is None:
-            self.is_provisioning = not ssid
+        self.is_provisioning = not (self.cfg_mgr.cfg.get("wifi").get("ssid") or "").strip()
+        # Initialize centralized device service
+        self.service = DeviceService(
+            self.state,
+            self.cfg_mgr,
+            self.schedule_reboot,
+            stats_mgr=self.stats
+        )
 
-        self.wifi = boot_ctx.get("wifi") if boot_ctx else None
-        if not self.wifi:
-            if self.is_provisioning:
-                from app.provision import ProvisionWifi
-                self.wifi = ProvisionWifi()
-            else:
-                from adapters.wifi import Wifi
-                self.wifi = Wifi()
+        if self.is_provisioning:
+            self.service.indicator.blink(freq_hz=3)
+
+            from app.provision import ProvisionWifi
+            self.wifi = ProvisionWifi()
+        else:
+            from adapters.wifi import Wifi
+            self.wifi = Wifi()
 
         self.switchbank = None
         # self.flow = None
@@ -58,17 +50,7 @@ class Supervisor:
         self.http_server = None
         self.http_api = None
 
-        # Initialize centralized device service
-        self.service = DeviceService(
-            self.state,
-            self.cfg_mgr,
-            self.schedule_reboot,
-            stats_mgr=self.stats
-        )
-        if self.is_provisioning:
-            self.service.indicator.blink(freq_hz=3)
-
-        self.wamp = WampBridge(self.cfg, self.state, self.service)
+        self.wamp = WampBridge(self.cfg_mgr.cfg, self.state, self.service)
 
         gc.collect()
 
@@ -97,14 +79,14 @@ class Supervisor:
             reset()
 
     def _local_minutes(self):
-        tz = int(self.cfg.get("schedule", {}).get("tz_offset_min", 0))
+        tz = int(self.cfg_mgr.cfg.get("schedule", {}).get("tz_offset_min", 0))
         t = time.time() + tz * 60
         lt = time.localtime(t)
         return lt[3] * 60 + lt[4]
 
     def _local_time(self):
         """Return (minutes_from_midnight, seconds)"""
-        tz = int(self.cfg.get("schedule", {}).get("tz_offset_min", 0))
+        tz = int(self.cfg_mgr.cfg.get("schedule", {}).get("tz_offset_min", 0))
         t = time.time() + tz * 60
         lt = time.localtime(t)
         return (lt[3] * 60 + lt[4], lt[5])
@@ -118,7 +100,8 @@ class Supervisor:
         from drivers.flowsensor import FlowSensor, flowtypes
         from domain.dosing import DosingController
 
-        pwm_cfg = self.cfg["outputs"]["pwm"]
+        cfg = self.cfg_mgr.cfg
+        pwm_cfg = cfg["outputs"]["pwm"]
 
         # pca_cfg = self.cfg["outputs"]["pca9685"]
         # if pca_cfg.get("enabled", True):
@@ -130,7 +113,7 @@ class Supervisor:
         #     pca.set_pwm_freq(int(pca_cfg.get("pwm_freq",1000)))
         #     self.switchbank = SwitchBank(pca, channels=int(pca_cfg.get("channels",16)))
 
-        fcfg = self.cfg["flow"]
+        fcfg = cfg["flow"]
         ppl = flowtypes.get(fcfg.get("type", "YFS401"))
         self.service.pwm = PwmOut(pwm_cfg["pin"], pwm_cfg.get("freq", 1000), pwm_cfg.get("active_low", False))
 
@@ -143,7 +126,7 @@ class Supervisor:
         # refactor this instantiation into service
         self.service.dosing = DosingController(self.service.flow,
                                                self.service.pwm,
-                                               self.cfg,
+                                               self.cfg_mgr.cfg,
                                                state=self.state,
                                                stats=self.stats,
                                                activity_update=self.wamp.publish_status)
@@ -187,9 +170,9 @@ class Supervisor:
 
     async def task_ntp(self):
         from adapters.ntp import sync as ntp_sync
-
-        every = int(self.cfg.get("ntp", {}).get("sync_every_s", 21600))
-        host = self.cfg.get("ntp", {}).get("host", "pool.ntp.org")
+        cfg = self.cfg_mgr.cfg.get("ntp", {})
+        every = int(cfg.get("sync_every_s", 21600))
+        host = cfg.get("host", "pool.ntp.org")
         initial_sync = True
 
         while True:
@@ -211,13 +194,13 @@ class Supervisor:
                 await asyncio.sleep(5)
 
     async def task_flow(self):
-        interval_ms = int(self.cfg["flow"].get("read_interval_ms", 1000))
+        interval_ms = int(self.cfg_mgr.cfg["flow"].get("read_interval_ms", 1000))
         next_ms = time.ticks_add(time.ticks_ms(), interval_ms)
         while True:
             now = time.ticks_ms()
             if time.ticks_diff(now, next_ms) >= 0:
                 flow = self.service.flow
-                flow.read(calibration=int(self.cfg["flow"].get("calibration", 0)))
+                flow.read(calibration=int(self.cfg_mgr.cfg["flow"].get("calibration", 0)))
                 self.state.flow_lps = flow.flow_lps
                 self.state.flow_lpm = flow.flow_lpm
                 self.state.volume_l = flow.volume_l
@@ -233,7 +216,7 @@ class Supervisor:
         while True:
             # Skip schedule if override is active or dosing is active
             if not self.service.pwm_override and not (self.service.dosing and self.service.dosing.is_dosing):
-                sched = self.cfg.get("schedule", {}).get("pwm", [])
+                sched = self.cfg_mgr.cfg.get("schedule", {}).get("pwm", [])
                 # config disabled
                 if sched:
                     mins, secs = self._local_time()
@@ -252,7 +235,7 @@ class Supervisor:
     async def task_pwm_test_btn(self):
         from machine import Pin
 
-        btn_cfg = self.cfg.get("inputs", {}).get("pwm_test_btn", {})
+        btn_cfg = self.cfg_mgr.cfg.get("inputs", {}).get("pwm_test_btn", {})
         pin_num = btn_cfg.get("pin")
         if not pin_num:
             LOG.error("task_pwm_test_btn: button pin not set")
@@ -297,12 +280,6 @@ class Supervisor:
         evt = asyncio.Event()
         await evt.wait()
 
-    def _patch_cfg(self, patch):
-        if self.cfg_mgr:
-            self.cfg = self.cfg_mgr.update(patch)
-            self.cfg_mgr.save()
-        else:
-            pass
 
     async def task_wamp(self):
         LOG.info("task_wamp: started")
@@ -371,13 +348,11 @@ class Supervisor:
 
                 # If the underlying error was OSError(16), cool down a bit more
                 eno = None
-                try:
-                    if isinstance(e, OSError) and e.args:
-                        eno = e.args[0]
-                except Exception:
-                    pass
-                finally:
-                    gc.collect()
+
+                if isinstance(e, OSError) and e.args:
+                    eno = e.args[0]
+
+                gc.collect()
 
                 msg = str(e)
                 if "send timeout" in msg:
@@ -416,7 +391,10 @@ class Supervisor:
             asyncio.create_task(self.task_wifi_status())
 
             if self.is_provisioning:
-                LOG.info("Provisioning mode")
+                from app.provision import dns_hijack_server
+                LOG.info("run: Provisioning mode")
+
+                asyncio.create_task(dns_hijack_server(ap_ip=self.wifi.ap_ip()))
                 asyncio.create_task(self.task_http())
 
                 # just idle; provisioning endpoint will save config + reboot
@@ -483,6 +461,3 @@ class Supervisor:
             reset()
 
 
-def start(boot_ctx=None):
-    sup = Supervisor("config.json", boot_ctx=boot_ctx)
-    asyncio.run(sup.run())

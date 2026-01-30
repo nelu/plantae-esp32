@@ -1,44 +1,7 @@
-import os
-
-import ujson as json
-
-DEFAULT = {
-    "wifi": {"ssid": "", "password": ""},
-    "wamp": {
-        "url": "wss://tswin.plantae.robits.org/ws",
-        "realm": "none",
-        "prefix": "none.",
-        "keepalive": {
-            "ping_interval_s": 25,
-            "idle_timeout_s": 180
-        }
-    },
-    "inputs": {
-        "pwm_test_btn": {
-            "pin": 35,
-            "active_low": False,
-            "test_duty": 0.5
-        }
-    },
-}
-
-
-def _merge(dst, src):
-    for k, v in src.items():
-        if isinstance(v, dict):
-            # ensure we don't share dict objects from DEFAULT / patch
-            if not isinstance(dst.get(k), dict):
-                dst[k] = {}
-            _merge(dst[k], v)
-        elif isinstance(v, list):
-            # avoid sharing lists (e.g. schedule.pwm)
-            dst[k] = list(v)
-        else:
-            dst[k] = v
+from lib.file_store import merge, load_with_default, atomic_save
 
 
 def _validate(cfg):
-
     flow = cfg.setdefault("flow", {})
     flow["pin"] = int(flow.get("pin", 14))
     flow["calibration"] = int(flow.get("calibration", 5880))
@@ -56,38 +19,52 @@ def _validate(cfg):
     return cfg
 
 
+
 class ConfigManager:
-    def __init__(self, path="config.json"):
+    def __init__(self, path="config.mpk"):
         self.path = path
         self.cfg = None
+        self.device_id = self.get_device_id()
+
+    @staticmethod
+    def default():
+        return {
+            "wifi": {"ssid": "", "password": ""},
+            "wamp": {
+                "url": "wss://tswin.plantae.robits.org/ws",
+                "realm": "none",
+                "prefix": "none.",
+                "keepalive": {
+                    "ping_interval_s": 25,
+                    "idle_timeout_s": 180
+                }
+            },
+            "inputs": {
+                "pwm_test_btn": {
+                    "pin": 35,
+                    "active_low": False,
+                    "test_duty": 0.5
+                }
+            },
+        }
+
+    @staticmethod
+    def get_device_id():
+        import ubinascii
+        import machine
+        return "plantae-" + ubinascii.hexlify(machine.unique_id()).decode()
 
     def load(self):
-        cfg = {}
-        _merge(cfg, DEFAULT)
-        try:
-            with open(self.path, "r") as f:
-                user = json.load(f)
-            if isinstance(user, dict):
-                _merge(cfg, user)
-        except Exception:
-            pass
-        self.cfg = _validate(cfg)
+        self.cfg = _validate(load_with_default(self.path, ConfigManager.default))
         return self.cfg
 
     def update(self, patch: dict):
         if self.cfg is None:
             self.load()
         if isinstance(patch, dict):
-            _merge(self.cfg, patch)
+            merge(self.cfg, patch)
             self.cfg = _validate(self.cfg)
         return self.cfg
 
     def save(self):
-        tmp = self.path + ".tmp"
-        with open(tmp, "w") as f:
-            json.dump(self.cfg, f)
-        try:
-            os.remove(self.path)
-        except Exception:
-            pass
-        os.rename(tmp, self.path)
+        atomic_save(self.path, self.cfg)

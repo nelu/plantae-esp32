@@ -3,16 +3,13 @@ import time
 import uasyncio as asyncio
 
 from lib.logging import LOG
-from adapters.config_manager import ConfigManager, DEFAULT
+from adapters.config_manager import ConfigManager
 from adapters.wifi import Wifi
-from app.device_id import get_device_id
 from app.provision import ProvisionWifi
 
 
-_BOOT_CTX = None
 
-
-def _maybe_factory_reset_button(config_path="config.json", hold_time_s=5, wait_window_s=5):
+def _maybe_factory_reset_button(hold_time_s=5, wait_window_s=5):
     hold_ms = int(hold_time_s * 1000)
     window_ms = int(max(hold_time_s, wait_window_s or 0) * 1000)
 
@@ -23,7 +20,7 @@ def _maybe_factory_reset_button(config_path="config.json", hold_time_s=5, wait_w
         time.sleep_ms(window_ms)
         return False
 
-    btn_cfg = (DEFAULT.get("inputs") or {}).get("pwm_test_btn", {})
+    btn_cfg = (ConfigManager.default().get("inputs") or {}).get("pwm_test_btn", {})
     pin_num = btn_cfg.get("pin")
     if pin_num is None:
         time.sleep_ms(window_ms)
@@ -53,13 +50,13 @@ def _maybe_factory_reset_button(config_path="config.json", hold_time_s=5, wait_w
                 try:
                     import os
 
-                    os.remove(config_path)
-                    os.remove("stats.json")
+                    os.remove("config.mpk")
+                    os.remove("stats.mpk")
 
-                    LOG.warning("factory_reset: %s removed; provisioning", config_path)
+                    LOG.warning("factory_reset: config.mpk removed; provisioning")
                     return True
                 except Exception as e:
-                    LOG.error("factory_reset: failed to remove %s: %s", config_path, e)
+                    LOG.error("factory_reset: failed to remove config.mpk: %s", e)
                     return False
         else:
             pressed_start = None
@@ -69,53 +66,38 @@ def _maybe_factory_reset_button(config_path="config.json", hold_time_s=5, wait_w
 
 
 def _init_boot():
-    cfg_mgr = ConfigManager("config.json")
+    LOG.info('_init_boot')
 
-    _maybe_factory_reset_button("config.json", hold_time_s=4, wait_window_s=5)
+    _maybe_factory_reset_button(hold_time_s=4, wait_window_s=5)
 
+    cfg_mgr = ConfigManager()
     cfg = cfg_mgr.load()
-
-    device_id = get_device_id(cfg)
 
     wifi_cfg = cfg.get("wifi") or {}
     ssid = (wifi_cfg.get("ssid") or "").strip()
     pwd = wifi_cfg.get("password")
     is_provisioning = not ssid
 
-    if LOG: LOG.info("boot: starting network, provisioning=%s", is_provisioning)
+    LOG.info("boot: starting network, provisioning=%s", is_provisioning)
 
     wifi = ProvisionWifi() if is_provisioning else Wifi()
 
     if is_provisioning:
-        ap_name = device_id
         try:
-            wifi.start_ap(ap_name)
-            try:
-                wifi.sta.active(False)
-            except Exception:
-                pass
+            wifi.start_ap(cfg_mgr.device_id)
         except Exception as e:
-            if LOG: LOG.error("boot: start_ap failed: %s", e)
+            LOG.error("boot: start_ap failed: %s", e)
     else:
         try:
             asyncio.run(wifi.ensure(ssid, pwd))
         except Exception as e:
-            if LOG: LOG.error("boot: wifi ensure failed: %s", e)
+            LOG.error("boot: wifi ensure failed: %s", e)
 
     return {
         "cfg_mgr": cfg_mgr,
-        "cfg": cfg,
         "wifi": wifi,
-        "device_id": device_id,
         "is_provisioning": is_provisioning,
     }
 
-
-def get_boot_context():
-    global _BOOT_CTX
-    if _BOOT_CTX is None:
-        _BOOT_CTX = _init_boot()
-    return _BOOT_CTX
-
 if __name__ == "__main__":
-    _BOOT_CTX = _init_boot()
+    _init_boot()

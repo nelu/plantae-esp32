@@ -1,18 +1,93 @@
 import time
 import network
 from adapters.wifi import Wifi
+from lib.logging import LOG
 import uasyncio as asyncio
 import ujson as json
 import gc
 import os
+import socket
 
 from adapters.http_api import HttpApi
+
+AP_DEVICE_IP="192.168.110.1"
+
+def ip_to_bytes(ip):
+    return bytes(map(int, ip.split(".")))
+
+
+async def dns_hijack_server(listen_ip="0.0.0.0", ap_ip=AP_DEVICE_IP):
+    import struct
+    # UDP/53 DNS server
+    s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+    s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+    s.bind((listen_ip, 53))
+    s.setblocking(False)
+
+    ap_ip_b = ip_to_bytes(ap_ip)
+
+    while True:
+        try:
+            data, addr = s.recvfrom(512)
+        except OSError:
+            await asyncio.sleep_ms(10)
+            continue
+
+        if len(data) < 12:
+            continue
+
+        # DNS header
+        tid = data[0:2]
+        flags = data[2:4]
+        qdcount = struct.unpack("!H", data[4:6])[0]
+        if qdcount < 1:
+            continue
+
+        # Find end of QNAME (labels ending with 0x00)
+        i = 12
+        while i < len(data) and data[i] != 0:
+            i += 1 + data[i]
+        i += 1  # skip 0 byte
+
+        if i + 4 > len(data):
+            continue
+
+        qtype, qclass = struct.unpack("!HH", data[i:i + 4])
+        question = data[12:i + 4]  # QNAME + QTYPE + QCLASS
+
+        # Build response header: QR=1, RD copied, RA=0, RCODE=0
+        # 0x8180 is a common "standard query response, no error"
+        resp_flags = b"\x81\x80"
+
+        # If query is type A (1) and class IN (1), include an A answer
+        if qtype == 1 and qclass == 1:
+            ancount = 1
+            header = tid + resp_flags + struct.pack("!HHHH", 1, ancount, 0, 0)
+
+            # Answer: NAME as pointer to question name at 0x0c -> 0xC00C
+            answer = b"\xC0\x0C"  # NAME (pointer)
+            answer += struct.pack("!HHI", 1, 1, 30)  # TYPE=A, CLASS=IN, TTL=30
+            answer += struct.pack("!H", 4)  # RDLENGTH
+            answer += ap_ip_b  # RDATA (your AP IP)
+
+            resp = header + question + answer
+        else:
+            # No answers for other types (AAAA, etc.)
+            header = tid + resp_flags + struct.pack("!HHHH", 1, 0, 0, 0)
+            resp = header + question
+
+        try:
+            s.sendto(resp, addr)
+        except OSError:
+            LOG.warning('dns_hijack_server: Failed to responde with %s', ap_ip)
+            pass
+
 
 class ProvisionWifi(Wifi):
     def __init__(self):
         super().__init__()
         self.ap = network.WLAN(network.AP_IF)
-        self.ap.active(False)
+        # self.ap.active(False)
         self._ap_ssid = None
 
     def ap_ip(self):
@@ -28,13 +103,14 @@ class ProvisionWifi(Wifi):
         # clean restart
         try:
             self.ap.active(False)
-        except Exception:
+        except Exception as e:
+            LOG.error("start_ap: AP reset failed: %s", e)
             pass
-        time.sleep_ms(300)
+        time.sleep_ms(500)
 
         # bring AP up first (ESP32 often requires this before config)
         self.ap.active(True)
-        time.sleep_ms(300)
+        time.sleep_ms(500)
 
         # now configure SSID/auth
         if password:
@@ -43,7 +119,9 @@ class ProvisionWifi(Wifi):
             self.ap.config(essid=ssid, authmode=network.AUTH_OPEN)
 
         self._ap_ssid = ssid
-        print("start_ap: AP ifconfig:", self.ap.ifconfig())
+        self.ap.ifconfig((AP_DEVICE_IP,'255.255.255.0',AP_DEVICE_IP,AP_DEVICE_IP))
+
+        LOG.info("start_ap: %s - ifconfig %s", ssid, (self.ap.ifconfig(),))
 
     def stop_ap(self):
         if self.ap.active():
@@ -67,20 +145,16 @@ class ProvisionWifi(Wifi):
         ok = await self.ensure(ssid, password, timeout_s=timeout_s)
 
         res = {"connected": bool(ok), "status": int(self.sta.status()) if hasattr(self.sta, "status") else None,
-            "ip": self.ip(), }
+               "ip": self.ip(), }
 
         if ok and dns_check:
             try:
-                import socket
                 socket.getaddrinfo("pool.ntp.org", 123)
                 res["dns_ok"] = True
             except Exception:
                 res["dns_ok"] = False
 
         return res
-
-
-
 
 
 class ProvisionHttp(HttpApi):

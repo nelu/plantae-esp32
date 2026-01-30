@@ -1,7 +1,6 @@
-import os
 import time
 
-import ujson as json
+from lib.file_store import load_with_default, atomic_save
 
 
 DEFAULT_STATS = {
@@ -26,7 +25,7 @@ def _merge_stats(dst, src):
 
 
 class StatsManager:
-    def __init__(self, path="stats.json", save_interval_s=60):
+    def __init__(self, path="stats.mpk", save_interval_s=60):
         self.path = path
         self.save_interval_ms = int(save_interval_s * 1000)
         self.data = dict(DEFAULT_STATS)
@@ -40,6 +39,12 @@ class StatsManager:
         self._last_pwm_sample_ms = time.ticks_ms()
         self.state = None
 
+    def _default(self):
+        base = dict(DEFAULT_STATS)
+        if "alerts" not in base:
+            base["alerts"] = {}
+        return base
+
     def attach_state(self, state):
         self.state = state
         if state:
@@ -51,35 +56,33 @@ class StatsManager:
             self._last_volume_l = getattr(state, "volume_l", 0.0)
 
     def load(self):
+        loaded = load_with_default(self.path, self._default)
+
         saved = False
         try:
-            with open(self.path, "r") as f:
-                stored = json.load(f)
-            if isinstance(stored, dict):
-                # Migration Logic for legacy dosing_alert
-                if stored.get("dosing_alert") is True:
-                    reason = stored.get("dosing_alert_reason", "timeout")
-                    ts = stored.get("dosing_alert_ts", 0)
-                    if "alerts" not in stored:
-                        stored["alerts"] = {}
-                    # In-place update for migration
-                    stored["alerts"]["dosing"] = {"message": reason, "ts": ts}
-                    # Cleanup legacy
-                    try:
-                        del stored["dosing_alert"]
-                        del stored["dosing_alert_reason"] 
-                        del stored["dosing_alert_ts"]
-                        saved = True # Save migrated data
-                    except:
-                        pass
-                
-                _merge_stats(self.data, stored)
+            if loaded.get("dosing_alert") is True:
+                reason = loaded.get("dosing_alert_reason", "timeout")
+                ts = loaded.get("dosing_alert_ts", 0)
+                alerts = loaded.get("alerts") or {}
+                alerts["dosing"] = {"message": reason, "ts": ts}
+                loaded["alerts"] = alerts
+                try:
+                    del loaded["dosing_alert"]
+                    del loaded["dosing_alert_reason"]
+                    del loaded["dosing_alert_ts"]
+                except Exception:
+                    pass
+                saved = True
         except Exception:
             pass
-            
+
+        base = self._default()
+        _merge_stats(base, loaded)
+        self.data = base
+
         if saved:
             self.save()
-            
+
         self.dirty = False
         import gc
         gc.collect()
@@ -89,14 +92,7 @@ class StatsManager:
         self.dirty = True
 
     def save(self):
-        tmp = self.path + ".tmp"
-        with open(tmp, "w") as f:
-            json.dump(self.data, f)
-        try:
-            os.remove(self.path)
-        except Exception:
-            pass
-        os.rename(tmp, self.path)
+        atomic_save(self.path, self.data)
         self._last_save_ms = time.ticks_ms()
         self.dirty = False
         import gc

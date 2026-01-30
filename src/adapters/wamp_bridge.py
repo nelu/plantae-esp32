@@ -34,7 +34,7 @@ class WampBridge:
         )
 
     def _topic(self, name):
-        return self.cfg["wamp"].get("prefix", "") + name
+        return self.cfg["wamp"].get("prefix", "") + "." + name
 
     def _device_topic(self, topic_name, suffix=None):
         suffix = suffix or self.state.device_id

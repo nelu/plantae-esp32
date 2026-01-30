@@ -1,6 +1,6 @@
 import network as net
 import asyncio as a
-import json
+import umsgpack
 from machine import Pin
 import gc
 
@@ -10,11 +10,8 @@ from ws import AsyncWebsocketClient
 # if config file format is wrong, exception is raised and program will stop
 print("Trying to load config...")
 
-f = open("../config.json")
-text = f.read()
-f.close()
-config = json.loads(text)
-del text
+with open("../config.mpk", "rb") as f:
+    config = umsgpack.load(f)
 # ------------------------------------------------------------------------------
 
 print("Create WS instance...")

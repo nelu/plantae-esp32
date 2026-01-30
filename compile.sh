@@ -53,7 +53,6 @@ FILES=(
     "adapters/http_api.py"
 
     "app/supervisor.py"
-    "app/device_id.py"
     "app/provision.py"
 
     "domain/state.py"
@@ -67,7 +66,8 @@ FILES=(
     "drivers/pwm_out.py"
     "drivers/flowsensor.py"
 
-    
+
+    "lib/file_store.py"
     "lib/logging.py"
     "lib/async_websocket_client/__init__.py"
     "lib/async_websocket_client/ws.py"
