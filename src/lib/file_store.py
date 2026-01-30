@@ -1,4 +1,6 @@
 import os
+import time
+import gc
 from lib.logging import LOG
 
 
@@ -42,3 +44,60 @@ def atomic_save(path, data):
     except Exception:
         pass
     os.rename(tmp, path)
+
+
+class PersistentManager:
+    """Small helper to persist manager state with dirty tracking."""
+
+    def __init__(self, path, save_interval_s=60, initial=None, default_factory=None):
+        self.path = path
+        self.save_interval_ms = int(save_interval_s * 1000)
+        self.default_factory = default_factory or (lambda: {})
+
+        self.data = initial if isinstance(initial, dict) else self.default_factory()
+        self.dirty = False
+        self._loaded = False
+        self._last_save_ms = time.ticks_ms()
+        self.epoch_offset = 0
+
+    def default(self):
+        return self.default_factory()
+
+    def _normalize_ts(self, ts):
+        try:
+            ts_val = int(ts)
+        except Exception:
+            return 0
+        if ts_val <= 0:
+            return 0
+        if ts_val < self.epoch_offset:
+            return ts_val + self.epoch_offset
+        return ts_val
+
+    def _now_unix(self):
+        return int(time.time()) + self.epoch_offset
+
+    def _mark_dirty(self):
+        self.dirty = True
+
+    def _load_with_default(self):
+        loaded = load_with_default(self.path, self.default)
+        return loaded if isinstance(loaded, dict) else self.default()
+
+    def load(self):
+        self.data = self._load_with_default()
+        self.dirty = False
+        self._loaded = True
+        gc.collect()
+        return self.data
+
+    def save(self):
+        atomic_save(self.path, self.data)
+        self._last_save_ms = time.ticks_ms()
+        self.dirty = False
+        gc.collect()
+
+    def save_if_needed(self, force=False):
+        now = time.ticks_ms()
+        if force or (self.dirty and time.ticks_diff(now, self._last_save_ms) >= self.save_interval_ms):
+            self.save()

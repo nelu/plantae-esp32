@@ -33,15 +33,19 @@ class MockIndicator:
 
 
 class MockService:
-    def __init__(self):
+    def __init__(self, state=None):
         self.indicator = MockIndicator()
         self.dosing = Mock()
         self.dosing.start_dose = AsyncMock(return_value=True)
         self.dosing.stop_dose = Mock(return_value=True)
         self.dosing.get_dose_status = Mock(return_value={"active": False})
         self.stats = Mock()
-        self.stats.data = {"alerts": {}}
+        self.alerts = Mock()
+        self.alerts.data = {}
+        self.alerts.all = Mock(return_value=self.alerts.data)
         self._config_patches = []
+
+        self.state = state
 
         self.set_all_switches = Mock(return_value=True)
         self.set_switch = Mock(return_value=True)
@@ -70,11 +74,11 @@ class TestWampBridge(unittest.TestCase):
             }
         }
         self.state = MockState()
-        self.service = MockService()
+        self.service = MockService(self.state)
 
         with patch('src.adapters.wamp_bridge.AutobahnWS'):
             from src.adapters.wamp_bridge import WampBridge
-            self.bridge = WampBridge(self.cfg, self.state, self.service)
+            self.bridge = WampBridge(self.cfg, self.service)
 
         # Provide a client mock for publish calls used in tests
         self.bridge.client = Mock()

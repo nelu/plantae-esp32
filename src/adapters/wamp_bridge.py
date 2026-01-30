@@ -8,9 +8,8 @@ from protocols.mpautobahn import AutobahnWS
 
 
 class WampBridge:
-    def __init__(self, cfg, state, service):
+    def __init__(self, cfg, service):
         self.cfg = cfg
-        self.state = state
         self.service = service
         self.session_ready = False
         self._last_alive_state = False
@@ -37,7 +36,7 @@ class WampBridge:
         return self.cfg["wamp"].get("prefix", "") + "." + name
 
     def _device_topic(self, topic_name, suffix=None):
-        suffix = suffix or self.state.device_id
+        suffix = suffix or self.service.state.device_id
         return self._topic(topic_name + "." + suffix)
 
     def is_alive(self):
@@ -58,7 +57,7 @@ class WampBridge:
         return connected and self.session_ready
 
     async def connect(self, timeout_s=15):
-        self.state.wamp_ok = False
+        self.service.state.wamp_ok = False
         self.session_ready = False
         self.service.indicator.blink()
         LOG.info("connect: url=%s realm=%s", self.client.url, self.client.realm)
@@ -70,7 +69,7 @@ class WampBridge:
 
         except Exception as e:
             # make sure we drop sockets/refs so GC can reclaim things
-            self.state.last_error = e
+            self.service.state.last_error = e
             try:
                 await self.close()
                 gc.collect()
@@ -109,8 +108,8 @@ class WampBridge:
             LOG.info("_on_wamp_join: completed session=%s", session_id)
 
             self.session_ready = True
-            self.state.wamp_ok = True
-            self.state.last_error = None
+            self.service.state.wamp_ok = True
+            self.service.state.last_error = None
             self.service.indicator.on()
             # Start keepalive only after session is fully ready
             # self.client.start_keepalive()
@@ -132,7 +131,7 @@ class WampBridge:
             except Exception:
                 pass
 
-        self.state.wamp_ok = False
+        self.service.state.wamp_ok = False
         self.session_ready = False
         self.service.indicator.blink()
 
@@ -147,10 +146,12 @@ class WampBridge:
         # require a joined session
         if not self.client.is_connected():
             return
+        LOG.info("publish_announce: connect. Free: %d",  gc.mem_free())
 
-        payload = {"id": self.state.device_id, "ip": self.state.ip,
-                   "ver": self.state.version,
-                   "build": self.state.build,
+        payload = {"id": self.service.state.device_id,
+                   "ip": self.service.state.ip,
+                   "ver": self.service.state.version,
+                   "build": self.service.state.build,
                    "ts": time.time(),
                    "config": self.cfg
                    }
@@ -159,9 +160,13 @@ class WampBridge:
         if exclude_me is not None:
             options["exclude_me"] = exclude_me
 
-        options["acknowledge"] = True
+        options["acknowledge"] = False
+        gc.collect()
+        LOG.info("publish_announce: connect. Free: %d",  gc.mem_free())
 
         pub_id = await self.client.publish(self._topic(topic_name), kwargs=payload, options=options)
+        gc.collect()
+
         # LOG.debug("Announce published: %s pub_id=%s", topic_name, pub_id)
 
     async def publish_activity(self, payload):
@@ -183,7 +188,7 @@ class WampBridge:
     async def publish_status(self, **kwargs):
         # LOG.debug("publish_status")
         if not self.is_alive(): return
-        await self.publish_device_topic("status", payload=self.state.snapshot())
+        await self.publish_device_topic("status", payload=self.service.state.snapshot())
         await asyncio.sleep(0.1)
 
     async def on_master(self, args, kwargs, details):
@@ -277,9 +282,7 @@ class WampBridge:
         action = kwargs.get("action", "list")
 
         if action == "list":
-            if self.service.stats:
-                return self.service.stats.data.get("alerts", {})
-            return {}
+            return self.service.state.alerts.all()
 
         elif action == "clear":
             kind = kwargs.get("kind")

@@ -1,10 +1,48 @@
 import time, gc
 
-UNIX_EPOCH_OFFSET = 946684800
+from lib.file_store import PersistentManager
+
+
+class AlertManager(PersistentManager):
+    def __init__(self, path="alerts.mpk", save_interval_s=60, initial=None):
+        super().__init__(path, save_interval_s, initial=initial, default_factory=self.default)
+        self.epoch_offset = DeviceState.UNIX_EPOCH_OFFSET
+
+    def default(self):
+        return {}
+
+    def set_alert(self, kind, message, ts=None, persist=True):
+        ts_val = self._now_unix() if ts is None else self._normalize_ts(ts)
+        alert = self.data.get(kind)
+        if alert:
+            alert["message"] = message
+            alert["ts"] = ts_val
+        else:
+            self.data[kind] = {"message": message, "ts": ts_val}
+        self._mark_dirty()
+        if persist:
+            self.save_if_needed(force=True)
+
+    def clear_alert(self, kind, persist=True):
+        if kind in self.data:
+            del self.data[kind]
+            self._mark_dirty()
+            if persist:
+                self.save_if_needed(force=True)
+            return True
+        return False
+
+    def get_alert(self, kind):
+        return self.data.get(kind)
+
+    def all(self):
+        return self.data
 
 
 class DeviceState:
-    def __init__(self, device_id, stats=None):
+    UNIX_EPOCH_OFFSET = 946684800
+
+    def __init__(self, device_id, stats_mgr=None):
         from version import VERSION, BUILD_DATE
 
         self.device_id = device_id
@@ -23,22 +61,23 @@ class DeviceState:
         self.last_error = ""
         self.version = VERSION
         self.build = BUILD_DATE
-        stats = stats or {}
-        self.last_dose_ts = int(stats.get("last_dose_ts", 0) or 0)
-        self.lifetime_volume_l = float(stats.get("lifetime_volume_l", 0.0) or 0.0)
-        self.pwm_runtime_s = float(stats.get("pwm_runtime_s", 0.0) or 0.0)
-        # Alerts dictionary - bind to stats if available or empty
-        self.alerts = stats.get("alerts", {})
+
+        self.stats_mgr = stats_mgr
+
+        self.alerts = AlertManager()
+        self.alerts.load()
+
 
     def uptime_s(self):
         return time.ticks_diff(time.ticks_ms(), self.boot_ms) // 1000
 
     def snapshot(self):
         gc.collect()
+
         return {
             "id": self.device_id,
             "ip": self.ip,
-            "utc": time.time() + UNIX_EPOCH_OFFSET,
+            "utc": time.time() + self.UNIX_EPOCH_OFFSET,
             "uptime_s": self.uptime_s(),
             "heap": gc.mem_free(),
             "flow": {"lps": self.flow_lps, "lpm": self.flow_lpm, "vol_l": self.volume_l, "pulses": self.pulses},
@@ -46,10 +85,6 @@ class DeviceState:
             "dosing": self.dosing_status,
             "health": {"signal": self.signal,
                        "ntp": self.ntp_ok, "wamp": self.wamp_ok, "err": self.last_error},
-            "stats": {
-                "last_dose_ts": self.last_dose_ts,
-                "lifetime_volume_l": self.lifetime_volume_l,
-                "pwm_runtime_s": self.pwm_runtime_s,
-                "alerts": self.alerts,
-            },
+            "alerts": self.alerts.data,
+            "stats": self.stats_mgr.data,
         }

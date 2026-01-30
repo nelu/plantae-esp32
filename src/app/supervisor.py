@@ -18,10 +18,10 @@ class Supervisor:
         self.cfg_mgr.load()
 
         self.stats = StatsManager()
-        stats_data = self.stats.load()
+        self.stats.load()
 
-        self.state = DeviceState(self.cfg_mgr.device_id, stats_data)
-        self.stats.attach_state(self.state)
+        # DeviceState owns alerts manager; use it directly
+        self.state = DeviceState(self.cfg_mgr.device_id, stats_mgr=self.stats)
 
         self.is_provisioning = not (self.cfg_mgr.cfg.get("wifi").get("ssid") or "").strip()
         # Initialize centralized device service
@@ -29,7 +29,7 @@ class Supervisor:
             self.state,
             self.cfg_mgr,
             self.schedule_reboot,
-            stats_mgr=self.stats
+            stats_mgr=self.stats,
         )
 
         if self.is_provisioning:
@@ -50,7 +50,7 @@ class Supervisor:
         self.http_server = None
         self.http_api = None
 
-        self.wamp = WampBridge(self.cfg_mgr.cfg, self.state, self.service)
+        self.wamp = WampBridge(self.cfg_mgr.cfg, self.service)
 
         gc.collect()
 
@@ -459,5 +459,3 @@ class Supervisor:
             await asyncio.sleep(10)
             from machine import reset
             reset()
-
-

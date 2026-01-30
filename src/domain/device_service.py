@@ -10,8 +10,8 @@ class DeviceService:
     )
     def __init__(self, state, config_mgr, schedule_reboot, 
                  pwm_controller=None, flow_sensor=None, 
-                 dosing_controller=None, switchbank=None,
-                 stats_mgr=None):
+                  dosing_controller=None, switchbank=None,
+                  stats_mgr=None):
         self.state = state
         self.config_mgr = config_mgr
         self._schedule_reboot = schedule_reboot
@@ -102,16 +102,10 @@ class DeviceService:
         return True
 
     def clear_alert(self, kind):
-        if self.stats:
-            self.stats.clear_alert(kind, persist=True)
-            return True
-        return False
-        
+        return self.state.alerts.clear_alert(kind, persist=True)
+         
     def set_alert(self, kind, message):
-         if self.stats:
-             self.stats.set_alert(kind, message, persist=True)
-             return True
-         return False
+        return self.state.alerts.set_alert(kind, message, persist=True)
 
     def set_switch(self, idx, on):
         if self.switches:

@@ -1,10 +1,11 @@
-import time
 import uasyncio as asyncio
 
+from domain.state import DeviceState
 from lib.logging import LOG
+import time
 
 class DosingController:
-    def __init__(self, flow_sensor, output_controller, config, state=None, stats=None, activity_update=None):
+    def __init__(self, flow_sensor, output_controller, config, state=None, stats=None, alerts_mgr=None, activity_update=None):
         self.flow_sensor = flow_sensor
         self.output_controller = output_controller
         self.config = config
@@ -21,7 +22,8 @@ class DosingController:
         if self.stats:
             try:
                 ts = int(self.stats.data.get("last_dose_ts", 0) or 0)
-                self.last_auto_dose_day = self._ts_to_local_day(ts) if ts > 0 else -1
+                ts_local_day = self._ts_to_local_day(ts) if ts > 0 else -1
+                self.last_auto_dose_day = ts_local_day
             except Exception:
                 self.last_auto_dose_day = -1
         
@@ -32,16 +34,20 @@ class DosingController:
 
     def _local_wday(self):
         """Return local weekday index (Mon=0..Sun=6) using tz offset"""
-        t = time.time() + self.tz_offset_min * 60
+        t = self._unix_now() + self.tz_offset_min * 60
         lt = time.localtime(t)
         return int(lt[6])
 
     def _current_local_day(self):
         """Day number since epoch in local time (tz adjusted)"""
-        return int((time.time() + self.tz_offset_min * 60) // 86400)
+        return int((self._unix_now() + self.tz_offset_min * 60) // 86400)
 
     def _ts_to_local_day(self, ts):
         return int((int(ts) + self.tz_offset_min * 60) // 86400)
+
+    @staticmethod
+    def _unix_now():
+        return int(time.time()) + DeviceState.UNIX_EPOCH_OFFSET
     
     async def start_dose(self, quantity_l, is_manual=False):
         """Start dosing a specific quantity in milliliters"""
@@ -138,8 +144,7 @@ class DosingController:
         duration = time.time() - self.dose_start_time
         if duration > self.timeout_s:
             LOG.error("Dosing timeout after %.1f seconds", duration)
-            if self.stats:
-                self.stats.set_alert("dosing", "timeout", ts=self.dose_start_time, persist=True)
+            self.state.alerts.set_alert("dosing", "timeout", ts=self.dose_start_time, persist=True)
             self.stop_dose()
             return
             
@@ -184,10 +189,9 @@ class DosingController:
             quantity = float(dosing_cfg.get("quantity", 0) or 0)
             if quantity <= 0:
                 return
-            if self.stats:
-                alert = self.stats.get_alert("dosing")
-                if alert:
-                    return
+            alert = self.state.alerts.get_alert("dosing")
+            if alert:
+                return
             success = await self.start_dose(quantity)
             if success:
                 self.last_auto_dose_day = current_day

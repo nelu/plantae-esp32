@@ -1,7 +1,7 @@
 import ntptime
 import uasyncio as asyncio
 import time
-from domain.state import UNIX_EPOCH_OFFSET
+from domain.state import DeviceState
 
 async def sync(host="pool.ntp.org", retries=3):
     ntptime.host = host
@@ -12,7 +12,7 @@ async def sync(host="pool.ntp.org", retries=3):
             # Unix timestamp for Jan 1, 2020 is 1577836800
             # Convert to MicroPython time: 1577836800 - 946684800 = 631152000
             unix_2020 = 1577836800
-            micropython_2020 = unix_2020 - UNIX_EPOCH_OFFSET
+            micropython_2020 = unix_2020 - DeviceState.UNIX_EPOCH_OFFSET
             if time.time() > micropython_2020:
                 return True
         except Exception as e:
