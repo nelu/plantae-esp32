@@ -6,9 +6,8 @@ This will help identify where the issue is occurring
 
 import time
 import uasyncio as asyncio
-import ujson as json
 from protocols.mpautobahn import AutobahnWS, parse_ws_url
-from lib.logging import getLogger, basicConfig, DEBUG
+from logging import getLogger, basicConfig, DEBUG
 
 # Configure debug logging
 basicConfig(level=DEBUG, format="%(asctime)s %(levelname)s:%(name)s:%(message)s", datefmt="%H:%M:%S")

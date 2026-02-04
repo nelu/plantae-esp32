@@ -7,7 +7,7 @@ Run this on the device to test if subscriptions work
 import time
 import uasyncio as asyncio
 from protocols.mpautobahn import AutobahnWS, parse_ws_url
-from lib.logging import getLogger, basicConfig, DEBUG
+from logging import getLogger, basicConfig, DEBUG
 
 # Configure logging
 basicConfig(level=DEBUG)
