@@ -4,7 +4,13 @@ import time
 import uasyncio as asyncio
 
 from logging import LOG
-from protocols.mpautobahn import AutobahnWS
+
+
+from mp_wamp_client import MicropythonWampClient  # type: ignore
+
+
+def make_name(token, base, device_id):
+    return "%s.%s.%s" % (token, base, device_id)
 
 
 class WampBridge:
@@ -12,189 +18,192 @@ class WampBridge:
         self.cfg = cfg
         self.service = service
         self.session_ready = False
+        self.started = False
+        self.started_event = asyncio.Event()
         self._last_alive_state = False
+        self._wired = False
+        self._runner = None
 
-        url = self.cfg["wamp"]["url"]
-        realm = self.cfg["wamp"].get("realm", "realm1")
-        ka = self.cfg.get("wamp", {}).get("keepalive", {})
-        hostname = self.cfg["wamp"].get("sni_host")
-        # Basic gc before connection
-        gc.collect()
+        wamp_cfg = self.cfg.get("wamp", {})
+        url = wamp_cfg.get("url")
+        realm = wamp_cfg.get("realm", "home")
+        token = wamp_cfg.get("prefix", "public")
 
-        # AutobahnWS handles both WebSocket and WAMP session handshake
-        # Pass keepalive config for resilience over public internet
-        # Simple debug logging
-        self.client = AutobahnWS(
+        self.client = MicropythonWampClient(
             url=url,
             realm=realm,
-            sni_host=hostname,
-            ping_interval_s=ka.get("ping_interval_s"),
-            idle_timeout_s=ka.get("idle_timeout_s"),
+            token=token,
+            reconnect=4,
+            max_payload=4096,
         )
+        # session lifecycle hooks (DeviceApp-style)
+        self.client.on_session_join = self._on_session_join  # type: ignore[attr-defined]
+        self.client.on_session_lost = self._on_session_lost  # type: ignore[attr-defined]
 
-    def _topic(self, name):
-        return self.cfg["wamp"].get("prefix", "") + "." + name
+    def _schedule_announce(self, topic_name="announce.online"):
+        loop = asyncio.get_event_loop()
+        loop.create_task(self.publish_announce(topic_name))
 
-    def _device_topic(self, topic_name, suffix=None):
-        suffix = suffix or self.service.state.device_id
-        return self._topic(topic_name + "." + suffix)
+    def _name(self, base, no_sufx=False):
+        try:
+            return no_sufx and "%s.%s" % (self.client.token, base) or make_name(self.client.token, base,
+                                                                                self.service.state.device_id)
+        except Exception:
+            return base
+
+    def _reset_started(self):
+        self.started = False
+        self.started_event = asyncio.Event()
+
+    async def start(self, timeout_s=15):
+        # Basic gc before connection
+        gc.collect()
+        self.service.state.wamp_ok = False
+        self.session_ready = False
+        self._reset_started()
+        try:
+            self.service.indicator.blink()
+        except Exception:
+            pass
+
+        if not self._runner or self._runner.done():
+            self._runner = asyncio.create_task(self.client.run_forever())
+
+        await self._wait_session_ready(timeout_s)
+        await self._wire()
+        await self.wait_started()
 
     def is_alive(self):
-        """
-        Connectivity check for the current WAMP client (AutobahnWS).
-        """
+        connected = bool(getattr(self.client, "connected", False))
 
-        connected = bool(self.client.is_connected())
-
-        # Add debug logging when connection state changes
         if self._last_alive_state != connected:
             LOG.info("is_alive: state change: %s -> %s", self._last_alive_state, connected)
-            if not connected:
-                self.close()
 
         self._last_alive_state = connected
-
         return connected and self.session_ready
 
     async def connect(self, timeout_s=15):
-        self.service.state.wamp_ok = False
-        self.session_ready = False
-        self.service.indicator.blink()
-        LOG.info("connect: url=%s realm=%s", self.client.url, self.client.realm)
+        # Backward compatibility: use start()/run_forever
+        await self.start(timeout_s=timeout_s)
 
-        try:
-            self.client.on_join(self._on_wamp_join)
-            gc.collect()
-            await self.client.connect()
-
-        except Exception as e:
-            # make sure we drop sockets/refs so GC can reclaim things
-            self.service.state.last_error = e
-            try:
-                await self.close()
-                gc.collect()
-                await asyncio.sleep(5)  # <-- add this
-            except Exception:
-                pass
-            finally:
-                gc.collect()
-            raise
-
+    async def _wait_session_ready(self, timeout_s):
         t0 = time.ticks_ms()
-
         while not self.session_ready:
             await asyncio.sleep_ms(50)
             if time.ticks_diff(time.ticks_ms(), t0) > int(timeout_s * 1000):
-                raise OSError("WAMP session ready timeout (on_join failed)")
+                raise OSError("WAMP session ready timeout (join failed)")
 
-    async def _on_wamp_join(self, session_id=None):
-        """Called when WAMP session is joined - set up subscriptions and registrations"""
-        LOG.info("_on_wamp_join: start %s", session_id)
+    async def _wire(self):
+        if self._wired:
+            return
+        # Broad master subscription (no device suffix) for pool discovery
+        await self.client.subscribe(self._name("announce.master", no_sufx=True), self.on_master)
+        await self.client.register(self._name("control"), self.rpc_control)
+        await self.client.register(self._name("calibrate"), self.rpc_calibrate)
+        await self.client.register(self._name("dose"), self.rpc_dose)
+        await self.client.register(self._name("alert"), self.rpc_alert)
+        await self.client.register(self._name("output"), self.rpc_output)
+        await self.client.register(self._name("status"), self.rpc_status)
+        await self.client.register(self._name("restart"), self.rpc_reboot)
+        await self.client.register(self._name("reset"), self.rpc_reset)
+        self._wired = True
 
+    def _on_session_join(self, session_id=None):
+        LOG.info("session joined: %s", session_id)
+        self.session_ready = True
+        self.service.state.wamp_ok = True
+        self.service.state.last_error = None
+        self.started = True
+
+        self.started_event.set()
+        self.service.indicator.on()
+        self._schedule_announce("announce.online")
+
+    def _on_session_lost(self):
+        LOG.info("session lost")
+        self.session_ready = False
+        self.service.state.wamp_ok = False
+        self._reset_started()
         try:
-            await self.client.register(self._device_topic("control"), self.rpc_calibrate)
-            await self.client.register(self._device_topic("calibrate"), self.rpc_calibrate)
-            await self.client.register(self._device_topic("dose"), self.rpc_dose)
-            await self.client.register(self._device_topic("alert"), self.rpc_alert)
-            await self.client.register(self._device_topic("output"), self.rpc_output)
-            await self.client.register(self._device_topic("status"), self.rpc_status)
-            await self.client.register(self._device_topic("restart"), self.rpc_reboot)
-            await self.client.register(self._device_topic("reset"), self.rpc_reset)
-
-            await self.client.subscribe(self._topic("announce.master"), self.on_master)
-
-            await self.publish_announce("announce.online")
-
-            LOG.info("_on_wamp_join: completed session=%s", session_id)
-
-            self.session_ready = True
-            self.service.state.wamp_ok = True
-            self.service.state.last_error = None
-            self.service.indicator.on()
-            # Start keepalive only after session is fully ready
-            # self.client.start_keepalive()
-
-            gc.collect()
-
-        except Exception as e:
-            LOG.error("_on_wamp_join: failed %s", e)
-            gc.collect()
             self.service.indicator.blink()
-
-            raise
+        except Exception:
+            pass
 
     async def close(self):
+        # Close the client first so run_forever() exits cleanly
+        await self.client.close()
 
-        if self.client:
+        # Cancel runner task if still present
+        if self._runner:
+            self._runner.cancel()
             try:
-                await self.client.close()
-            except Exception:
+                await self._runner
+            except asyncio.CancelledError:
                 pass
+            finally:
+                self._runner = None
 
         self.service.state.wamp_ok = False
         self.session_ready = False
+        self._reset_started()
         self.service.indicator.blink()
 
-        # give uasyncio a chance to run socket close callbacks
         await asyncio.sleep_ms(200)
         gc.collect()
 
     async def publish_announce(self, topic_name, exclude_me=True):
-
-        # LOG.debug("publish_announce: %s", topic_name)
-
-        # require a joined session
-        if not self.client.is_connected():
+        if not self.is_alive():
             return
-        LOG.info("publish_announce: connect. Free: %d",  gc.mem_free())
 
-        payload = {"id": self.service.state.device_id,
-                   "ip": self.service.state.ip,
-                   "ver": self.service.state.version,
-                   "build": self.service.state.build,
-                   "ts": time.time(),
-                   "config": self.cfg
-                   }
+        payload = {
+            "id": self.service.state.device_id,
+            "ip": self.service.state.ip,
+            "ver": self.service.state.version,
+            "build": self.service.state.build,
+            "ts": time.time(),
+            "config": self.cfg,
+        }
 
         options = {}
         if exclude_me is not None:
             options["exclude_me"] = exclude_me
 
-        options["acknowledge"] = False
-        gc.collect()
-        LOG.info("publish_announce: connect. Free: %d",  gc.mem_free())
-
-        pub_id = await self.client.publish(self._topic(topic_name), kwargs=payload, options=options)
-        gc.collect()
-
-        # LOG.debug("Announce published: %s pub_id=%s", topic_name, pub_id)
+        # Broad announce only (pool discovery; no device suffix)
+        await self.client.publish(self._name(topic_name, no_sufx=True), kwargs=payload, options=options)
 
     async def publish_activity(self, payload):
-        if not self.is_alive(): return
-        await self.publish_device_topic("activity", payload=payload)
+        if not self.is_alive():
+            return
+        await self.client.publish(self._name("activity"), kwargs=payload)
 
     async def publish_switch(self, idx, on):
-        if not self.client: return
-        await self.client.publish(self._topic("switch"), args=[int(idx), int(bool(on))])
+        if not self.is_alive():
+            return
+        await self.client.publish(self._name("switch"), args=[int(idx), int(bool(on))])
 
     async def publish_topic(self, topic, payload, options=None):
-        if not self.is_alive(): return
-        await self.client.publish(self._topic(topic), kwargs=payload, options=options)
-
-    async def publish_device_topic(self, topic, payload):
-        if not self.is_alive(): return
-        await self.client.publish(self._device_topic(topic), kwargs=payload)
+        if not self.is_alive():
+            return
+        await self.client.publish(self._name(topic), kwargs=payload, options=options or {})
 
     async def publish_status(self, **kwargs):
-        # LOG.debug("publish_status")
-        if not self.is_alive(): return
-        await self.publish_device_topic("status", payload=self.service.state.snapshot())
+        if not self.is_alive():
+            return
+        await self.client.publish(self._name("status"), kwargs=self.service.state.snapshot())
         await asyncio.sleep(0.1)
 
-    async def on_master(self, args, kwargs, details):
-        await self.publish_announce("announce.online")
+    def is_started(self):
+        return self.started
 
-    async def rpc_control(self, args, kwargs, details):
+    async def wait_started(self):
+        await self.started_event.wait()
+        return self.started
+
+    async def on_master(self, args, kwargs):
+        LOG.debug("on_master: received announce.master -> announce.online")
+        self._schedule_announce("announce.online")
+
+    async def rpc_control(self, args, kwargs):
 
         if "all" in kwargs:
             return self.service.set_all_switches(bool(kwargs["all"]))
@@ -208,13 +217,13 @@ class WampBridge:
             return self.service.patch_config(kwargs["patch_cfg"])
         return False
 
-    async def rpc_calibrate(self, args, kwargs, details):
+    async def rpc_calibrate(self, args, kwargs):
         if kwargs.get("type") == "flow" and "calibration" in kwargs:
             cal = int(kwargs["calibration"])
             return self.service.patch_config({"flow": {"calibration": cal}})
         return False
 
-    async def rpc_dose(self, args, kwargs, details):
+    async def rpc_dose(self, args, kwargs):
         """Handle dosing RPC calls"""
         action = kwargs.get("action", "status")
 
@@ -277,7 +286,7 @@ class WampBridge:
         else:
             return {"error": "unknown_action", "action": action}
 
-    async def rpc_alert(self, args, kwargs, details):
+    async def rpc_alert(self, args, kwargs):
         """Handle generic alert management"""
         action = kwargs.get("action", "list")
 
@@ -302,7 +311,7 @@ class WampBridge:
 
         return {"error": "unknown_action", "action": action}
 
-    async def rpc_output(self, args, kwargs, details):
+    async def rpc_output(self, args, kwargs):
         """Handle output control RPC calls"""
         name = kwargs.get("name", "pwm")
         duty = kwargs.get("duty", 0.5)
@@ -322,14 +331,17 @@ class WampBridge:
         else:
             return {"error": "unknown_output", "name": name}
 
-    async def rpc_status(self, args, kwargs, details):
+    async def rpc_status(self, args, kwargs):
         """Get device status including dosing information"""
-        return self.service.get_status()
+        try:
+            return self.service.get_status()
+        except Exception as exc:
+            return {"error": str(exc)}
 
-    async def rpc_reset(self, args, kwargs, details):
+    async def rpc_reset(self, args, kwargs):
         return self.service.reset_counters()
 
-    async def rpc_reboot(self, args, kwargs, details):
+    async def rpc_reboot(self, args, kwargs):
         t = 1
         if args:
             try:

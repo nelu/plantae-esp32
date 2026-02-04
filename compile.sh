@@ -42,9 +42,9 @@ done
 FILES=(
     "version.py"
 
-    "protocols/mpautobahn/__init__.py"
-    "protocols/mpautobahn/client.py"
-    "protocols/mpautobahn/constants.py"
+#    "protocols/mpautobahn/__init__.py"
+#    "protocols/mpautobahn/client.py"
+#    "protocols/mpautobahn/constants.py"
 
     "adapters/wamp_bridge.py"
     "adapters/config_manager.py"
@@ -68,9 +68,10 @@ FILES=(
 
 
     "lib/file_store.py"
+    "lib/mp_wamp_client.py"
 #    "lib/logging.py"
-    "lib/async_websocket_client/__init__.py"
-    "lib/async_websocket_client/ws.py"
+#    "lib/async_websocket_client/__init__.py"
+#    "lib/async_websocket_client/ws.py"
 
 #    "lib/umsgpack/__init__.py"
 #    "lib/umsgpack/mp_dump.py"

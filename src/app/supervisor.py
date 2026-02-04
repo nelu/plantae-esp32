@@ -283,54 +283,43 @@ class Supervisor:
 
     async def task_wamp(self):
         LOG.info("task_wamp: started")
-
-        backoff = 1
         ntp_quiet_done = False
         fail_count = 0
+
         while True:
             if not self.wifi.is_connected():
                 await asyncio.sleep(2)
                 continue
 
-            # Wait for NTP sync before attempting WAMP connection
             if not self.state.ntp_ok:
                 await asyncio.sleep(2)
                 continue
 
-            # One-time quiet period after first NTP success (helps ESP32 TLS)
             if not ntp_quiet_done:
                 ntp_quiet_done = True
                 await asyncio.sleep(3)
 
             try:
-                LOG.info("task_wamp: connect. Signal: %d, Free: %d", self.state.signal, gc.mem_free())
+                LOG.info("task_wamp: start run_forever. Signal: %d, Free: %d", self.state.signal, gc.mem_free())
                 gc.collect()
-
                 await asyncio.sleep_ms(0)
 
-                await self.wamp.connect()
-                backoff = 1
+                await self.wamp.start(timeout_s=20)
+                fail_count = 0
 
-
-                while self.wamp.is_alive():
-                    await self.wamp.publish_status()
+                while True:
+                    if self.wamp._runner and self.wamp._runner.done():
+                        raise RuntimeError("wamp runner stopped")
+                    if self.wamp.is_alive():
+                        await self.wamp.publish_status()
                     await asyncio.sleep(1)
                     gc.collect()
 
-                # Connection loop ended; close cleanly before reconnecting
-                await self.wamp.close()
-
-                gc.collect()
-                await asyncio.sleep_ms(0)
-
-
             except Exception as e:
-
                 self.state.wamp_ok = False
                 self.state.last_error = (e,)
                 LOG.error("task_wamp: %r", e)
 
-                # Make sure we tear down the previous bridge/socket
                 try:
                     await self.wamp.close()
                 except Exception as e:
@@ -339,25 +328,19 @@ class Supervisor:
                     gc.collect()
                     await asyncio.sleep_ms(0)
 
-                gc.collect()
-
-                fail_count = fail_count + 1
+                fail_count += 1
                 if fail_count > 10:
                     LOG.error("task_wamp: Too many failures (%d). Rebooting...", fail_count)
                     self.schedule_reboot()
 
-                # If the underlying error was OSError(16), cool down a bit more
+                msg = str(e)
                 eno = None
-
                 if isinstance(e, OSError) and e.args:
                     eno = e.args[0]
 
-                gc.collect()
-
-                msg = str(e)
                 if "send timeout" in msg:
                     await asyncio.sleep(5)
-                elif "MBEDTLS" in msg or "ALLOC_FAILED" in msg or eno == 12: # ENOMEM
+                elif "MBEDTLS" in msg or "ALLOC_FAILED" in msg or eno == 12:
                     LOG.error("task_wamp: Memory/SSL error. Aggressive GC and Cooldown.")
                     gc.collect()
                     await asyncio.sleep(10)
@@ -365,10 +348,9 @@ class Supervisor:
                     gc.collect()
                     await asyncio.sleep(4)
                 else:
-                    await asyncio.sleep(backoff)
+                    await asyncio.sleep(2)
                 gc.collect()
 
-                backoff = 2 * backoff if backoff < 60 else 60
 
     async def task_dosing(self):
         """Update dosing controller regularly"""

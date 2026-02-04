@@ -4,45 +4,25 @@ from domain.state import DeviceState
 from lib.file_store import PersistentManager
 
 
+def _default():
+    return {
+        "last_dose_ts": 0,
+        "lifetime_volume_l": 0.0,
+        "pwm_runtime_s": 0.0,
+    }
+
+
 class StatsManager(PersistentManager):
     def __init__(self, path="stats.mpk", save_interval_s=60):
-        super().__init__(path, save_interval_s, default_factory=self.default)
+        super().__init__(path, save_interval_s, default_factory=_default)
 
         self._last_volume_l = None
         self._last_pwm_sample_ms = time.ticks_ms()
         self.epoch_offset = DeviceState.UNIX_EPOCH_OFFSET
 
-    def default(self):
-        return {
-            "last_dose_ts": 0,
-            "lifetime_volume_l": 0.0,
-            "pwm_runtime_s": 0.0,
-        }
-
-    def _merge_stats(self, dst, src):
-        allowed = self.default()
-        for k, v in src.items():
-            if k not in allowed:
-                continue
-            dst[k] = v
-
     def attach_state(self, state):
         # Deprecated: state binding removed; only track last volume for delta calculations when provided
         self._last_volume_l = getattr(state, "volume_l", 0.0) if state else None
-
-    def load(self):
-        loaded = self._load_with_default()
-
-        base = self.default()
-        self._merge_stats(base, loaded)
-        base["last_dose_ts"] = self._normalize_ts(base.get("last_dose_ts", 0))
-        self.data = base
-
-        self.dirty = False
-        self._loaded = True
-        import gc
-        gc.collect()
-        return self.data
 
     def record_dose(self, ts=None, persist_immediately=False):
         ts_norm = self._now_unix() if ts is None else self._normalize_ts(ts)

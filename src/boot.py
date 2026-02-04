@@ -1,12 +1,9 @@
 import time
+from logging import LOG
 
 import uasyncio as asyncio
 
-from logging import LOG
-from adapters.config_manager import ConfigManager
-from adapters.wifi import Wifi
-from app.provision import ProvisionWifi
-
+from adapters.config_manager import ConfigManager, default_cfg
 
 
 def _maybe_factory_reset_button(hold_time_s=5, wait_window_s=5):
@@ -20,7 +17,7 @@ def _maybe_factory_reset_button(hold_time_s=5, wait_window_s=5):
         time.sleep_ms(window_ms)
         return False
 
-    btn_cfg = (ConfigManager.default().get("inputs") or {}).get("pwm_test_btn", {})
+    btn_cfg = (default_cfg().get("inputs") or {}).get("pwm_test_btn", {})
     pin_num = btn_cfg.get("pin")
     if pin_num is None:
         time.sleep_ms(window_ms)
@@ -80,14 +77,18 @@ def _init_boot():
 
     LOG.info("boot: starting network, provisioning=%s", is_provisioning)
 
-    wifi = ProvisionWifi() if is_provisioning else Wifi()
-
     if is_provisioning:
+        from app.provision import ProvisionWifi
+        wifi = ProvisionWifi()
+
         try:
             wifi.start_ap(cfg_mgr.device_id)
         except Exception as e:
             LOG.error("boot: start_ap failed: %s", e)
     else:
+        from adapters.wifi import Wifi
+        wifi = Wifi()
+
         try:
             asyncio.run(wifi.ensure(ssid, pwd))
         except Exception as e:
@@ -98,6 +99,7 @@ def _init_boot():
         "wifi": wifi,
         "is_provisioning": is_provisioning,
     }
+
 
 if __name__ == "__main__":
     _init_boot()

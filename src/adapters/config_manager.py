@@ -1,6 +1,34 @@
 from lib.file_store import merge, load_with_default, atomic_save
 
 
+def get_device_id():
+    import ubinascii
+    import machine
+    return "plantae-" + ubinascii.hexlify(machine.unique_id()).decode()
+
+
+def default_cfg():
+    return {
+        "wifi": {"ssid": "", "password": ""},
+        "wamp": {
+            "url": "wss://plantae.robits.org/ws",
+            "realm": "none",
+            "prefix": "none.",
+            "keepalive": {
+                "ping_interval_s": 25,
+                "idle_timeout_s": 180
+            }
+        },
+        "inputs": {
+            "pwm_test_btn": {
+                "pin": 35,
+                "active_low": False,
+                "test_duty": 0.5
+            }
+        },
+    }
+
+
 def _validate(cfg):
     flow = cfg.setdefault("flow", {})
     flow["pin"] = int(flow.get("pin", 14))
@@ -19,43 +47,14 @@ def _validate(cfg):
     return cfg
 
 
-
 class ConfigManager:
     def __init__(self, path="config.mpk"):
         self.path = path
         self.cfg = None
-        self.device_id = self.get_device_id()
-
-    @staticmethod
-    def default():
-        return {
-            "wifi": {"ssid": "", "password": ""},
-            "wamp": {
-                "url": "wss://plantae.robits.org/ws",
-                "realm": "none",
-                "prefix": "none.",
-                "keepalive": {
-                    "ping_interval_s": 25,
-                    "idle_timeout_s": 180
-                }
-            },
-            "inputs": {
-                "pwm_test_btn": {
-                    "pin": 35,
-                    "active_low": False,
-                    "test_duty": 0.5
-                }
-            },
-        }
-
-    @staticmethod
-    def get_device_id():
-        import ubinascii
-        import machine
-        return "plantae-" + ubinascii.hexlify(machine.unique_id()).decode()
+        self.device_id = get_device_id()
 
     def load(self):
-        self.cfg = _validate(load_with_default(self.path, ConfigManager.default))
+        self.cfg = _validate(load_with_default(self.path, default_cfg))
         return self.cfg
 
     def update(self, patch: dict):
