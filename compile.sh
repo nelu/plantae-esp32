@@ -98,7 +98,7 @@ for rel_file in "${FILES[@]}"; do
         out_path="$DIST_DIR/$rel_dir/$filename.mpy"
         
         echo "$(date '+%Y-%m-%d %H:%M:%S') Compiling $rel_file -> $out_path"
-        $MPY_CROSS "$src_path" -o "$out_path"
+        $MPY_CROSS -O3 -s "$rel_file" -o "$out_path" -- "$src_path"
         
         if [ $? -ne 0 ]; then
             echo "$(date '+%Y-%m-%d %H:%M:%S')  [FAIL]"
