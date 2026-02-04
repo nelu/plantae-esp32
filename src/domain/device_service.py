@@ -1,4 +1,4 @@
-from lib.logging import LOG
+from logging import LOG
 
 
 class DeviceService:

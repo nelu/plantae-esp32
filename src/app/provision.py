@@ -1,7 +1,7 @@
 import time
 import network
 from adapters.wifi import Wifi
-from lib.logging import LOG
+from logging import LOG
 import uasyncio as asyncio
 import ujson as json
 import gc

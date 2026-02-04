@@ -1,7 +1,7 @@
 import uasyncio as asyncio
 
 from domain.state import DeviceState
-from lib.logging import LOG
+from logging import LOG
 import time
 
 class DosingController:

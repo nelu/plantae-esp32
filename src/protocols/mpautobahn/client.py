@@ -3,10 +3,10 @@ import gc
 import time
 
 import uasyncio as asyncio
-from lib import umsgpack
+import umsgpack
 
 from lib.async_websocket_client.ws import AsyncWebsocketClient
-from lib.logging import LOG
+from logging import LOG
 from . import constants as C
 
 

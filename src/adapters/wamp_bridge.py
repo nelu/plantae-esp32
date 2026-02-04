@@ -3,7 +3,7 @@ import time
 
 import uasyncio as asyncio
 
-from lib.logging import LOG
+from logging import LOG
 from protocols.mpautobahn import AutobahnWS
 
 

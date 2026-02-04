@@ -2,7 +2,7 @@ import time
 
 import uasyncio as asyncio
 
-from lib.logging import LOG
+from logging import LOG
 from adapters.config_manager import ConfigManager
 from adapters.wifi import Wifi
 from app.provision import ProvisionWifi

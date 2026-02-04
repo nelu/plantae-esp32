@@ -141,7 +141,6 @@ plantae-micropython-esp32/
    import uasyncio as asyncio
    
    # Local imports
-   from lib.logging import getLogger
    from domain.state import DeviceState
    ```
 

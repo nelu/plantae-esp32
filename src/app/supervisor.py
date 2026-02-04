@@ -3,7 +3,7 @@ import gc
 
 import uasyncio as asyncio
 
-from lib.logging import LOG
+from logging import LOG
 
 
 class Supervisor:

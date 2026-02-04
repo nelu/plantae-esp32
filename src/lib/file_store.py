@@ -1,7 +1,7 @@
 import os
 import time
 import gc
-from lib.logging import LOG
+from logging import LOG
 
 
 def merge(dst, src):

@@ -31,7 +31,7 @@ class ConfigManager:
         return {
             "wifi": {"ssid": "", "password": ""},
             "wamp": {
-                "url": "wss://tswin.plantae.robits.org/ws",
+                "url": "wss://plantae.robits.org/ws",
                 "realm": "none",
                 "prefix": "none.",
                 "keepalive": {

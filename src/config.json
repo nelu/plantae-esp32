@@ -8,7 +8,7 @@
     "sync_every_s": 21600
   },
   "wamp": {
-    "url": "wss://tswin.plantae.robits.org/ws",
+    "url": "wss://plantae.robits.org/ws",
     "sni_host": "plantae.robits.org",
     "realm": "home",
     "prefix": "org.robits.plantae.",

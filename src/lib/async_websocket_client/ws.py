@@ -9,7 +9,7 @@ import ssl
 import gc
 import sys
 import time
-from lib.logging import LOG
+from logging import LOG
 
 # Opcodes
 OP_CONT = const(0x0)
