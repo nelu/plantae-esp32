@@ -3,7 +3,7 @@ from logging import LOG
 
 import uasyncio as asyncio
 
-from adapters.config_manager import ConfigManager, default_cfg
+from adapters.config_manager import CFG, default_cfg
 
 
 def _maybe_factory_reset_button(hold_time_s=5, wait_window_s=5):
@@ -67,8 +67,7 @@ def _init_boot():
 
     _maybe_factory_reset_button(hold_time_s=4, wait_window_s=5)
 
-    cfg_mgr = ConfigManager()
-    cfg = cfg_mgr.load()
+    cfg = CFG.load()
 
     wifi_cfg = cfg.get("wifi") or {}
     ssid = (wifi_cfg.get("ssid") or "").strip()
@@ -82,7 +81,7 @@ def _init_boot():
         wifi = ProvisionWifi()
 
         try:
-            wifi.start_ap(cfg_mgr.device_id)
+            wifi.start_ap(CFG.device_id)
         except Exception as e:
             LOG.error("boot: start_ap failed: %s", e)
     else:
@@ -93,12 +92,6 @@ def _init_boot():
             asyncio.run(wifi.ensure(ssid, pwd))
         except Exception as e:
             LOG.error("boot: wifi ensure failed: %s", e)
-
-    return {
-        "cfg_mgr": cfg_mgr,
-        "wifi": wifi,
-        "is_provisioning": is_provisioning,
-    }
 
 
 if __name__ == "__main__":

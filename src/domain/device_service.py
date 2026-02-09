@@ -3,17 +3,16 @@ from logging import LOG
 
 class DeviceService:
     __slots__ = (
-        "state","config_mgr","_schedule_reboot",
+        "state","_schedule_reboot",
         "flow","dosing","switches","pwm",
         "pwm_override","pwm_override_source","stats",
         "indicator",
     )
-    def __init__(self, state, config_mgr, schedule_reboot, 
+    def __init__(self, state, schedule_reboot, 
                  pwm_controller=None, flow_sensor=None, 
                   dosing_controller=None, switchbank=None,
                   stats_mgr=None):
         self.state = state
-        self.config_mgr = config_mgr
         self._schedule_reboot = schedule_reboot
         self.flow = flow_sensor
         self.dosing = dosing_controller
@@ -32,11 +31,13 @@ class DeviceService:
         return self.state.snapshot()
 
     def get_config(self):
-        return self.config_mgr.cfg
+        from adapters.config_manager import CFG
+        return CFG.data
 
     def patch_config(self, patch):
-        self.config_mgr.update(patch)
-        self.config_mgr.save()
+        from adapters.config_manager import CFG
+        CFG.update(patch)
+        CFG.save()
         return True
 
     def reboot(self, timeout_s=1):

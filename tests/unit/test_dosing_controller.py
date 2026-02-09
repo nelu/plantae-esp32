@@ -4,8 +4,88 @@ Unit tests for DosingController class
 """
 
 import unittest
-from unittest.mock import Mock, AsyncMock
-import asyncio
+import time
+import sys
+import os
+
+try:
+    import asyncio
+except ImportError:  # MicroPython fallback
+    try:
+        import uasyncio as asyncio
+    except ImportError:
+        class _AsyncioStub:
+            @staticmethod
+            def run(coro):
+                try:
+                    return coro.send(None)
+                except StopIteration as e:
+                    return getattr(e, "value", None)
+
+            @staticmethod
+            def create_task(coro):
+                # Execute immediately for test purposes
+                try:
+                    coro.send(None)
+                except StopIteration:
+                    pass
+                return coro
+
+            @staticmethod
+            def new_event_loop():
+                class _Loop:
+                    def run_until_complete(self, c):
+                        return _AsyncioStub.run(c)
+                    def close(self):
+                        pass
+                return _Loop()
+
+            @staticmethod
+            def set_event_loop(loop):
+                return None
+
+        asyncio = _AsyncioStub()
+
+if "uasyncio" not in sys.modules:
+    sys.modules["uasyncio"] = asyncio
+
+# Ensure project modules are importable in MicroPython container
+try:
+    ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))
+except AttributeError:
+    ROOT = "/app"
+
+for p in (
+    ROOT,
+    ROOT + "/src",
+    ROOT + "/src/lib",
+):
+    if p not in sys.path:
+        sys.path.append(p)
+
+# Force use of project logging module so LOG/Logger are available
+try:
+    import src.lib.logging as _proj_logging
+    sys.modules["logging"] = _proj_logging
+except Exception:
+    pass
+
+# Provide a lightweight umsgpack stub if missing (used only for persistence helpers)
+try:
+    import umsgpack  # type: ignore
+except ImportError:  # pragma: no cover - environment guard
+    try:
+        import ujson as _json
+    except ImportError:  # pragma: no cover
+        import json as _json
+
+    class _UMsgpackStub:
+        pass
+
+    _stub = _UMsgpackStub()
+    _stub.load = lambda f: _json.load(f)
+    _stub.dump = lambda obj, f: _json.dump(obj, f)
+    sys.modules["umsgpack"] = _stub
 
 
 class MockFlowSensor:
@@ -39,11 +119,13 @@ class TestDosingController(unittest.TestCase):
                 }
             }
         }
-        
+
         # Import here to avoid MicroPython import issues
         try:
             from src.domain.dosing import DosingController
-            self.controller = DosingController(self.flow_sensor, self.pwm_out, self.cfg)
+            from src.adapters.config_manager import CFG
+            CFG.data = self.cfg
+            self.controller = DosingController(self.flow_sensor, self.pwm_out)
         except ImportError:
             self.skipTest("DosingController not available (MicroPython only)")
     
@@ -114,6 +196,25 @@ class TestDosingController(unittest.TestCase):
         self.assertAlmostEqual(status["dosed_l"], 0.2)
         self.assertAlmostEqual(status["remaining_l"], 0.3)
         self.assertGreaterEqual(status["duration_s"], 0)
+
+    def test_local_wday_is_monday_for_epoch_day_4(self):
+        """Weekday calculation stays Monday with tz offset applied"""
+        monday_ts = 4 * 86400  # 1970-01-05 00:00:00 UTC (Monday)
+        import src.domain.dosing as dosing
+
+        orig_time_mod = dosing.time
+
+        class _TimeStub:
+            pass
+
+        _stub = _TimeStub()
+        _stub.time = lambda: monday_ts
+        _stub.localtime = lambda t=None: time.gmtime(t)
+        try:
+            dosing.time = _stub
+            self.assertEqual(self.controller._local_wday(), 0)
+        finally:
+            dosing.time = orig_time_mod
 
     async def test_update_triggers_auto_dose_for_today(self):
         """Auto dosing starts when today's slot is set and not yet dosed"""

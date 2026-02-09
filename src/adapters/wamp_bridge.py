@@ -5,7 +5,7 @@ import uasyncio as asyncio
 
 from logging import LOG
 
-
+from adapters.config_manager import CFG
 from mp_wamp_client import MicropythonWampClient  # type: ignore
 
 
@@ -14,8 +14,7 @@ def make_name(token, base, device_id):
 
 
 class WampBridge:
-    def __init__(self, cfg, service):
-        self.cfg = cfg
+    def __init__(self, service):
         self.service = service
         self.session_ready = False
         self.started = False
@@ -24,7 +23,7 @@ class WampBridge:
         self._wired = False
         self._runner = None
 
-        wamp_cfg = self.cfg.get("wamp", {})
+        wamp_cfg = CFG.data.get("wamp", {})
         url = wamp_cfg.get("url")
         realm = wamp_cfg.get("realm", "home")
         token = wamp_cfg.get("prefix", "public")
@@ -161,7 +160,7 @@ class WampBridge:
             "ver": self.service.state.version,
             "build": self.service.state.build,
             "ts": time.time(),
-            "config": self.cfg,
+            "config": CFG.data,
         }
 
         options = {}

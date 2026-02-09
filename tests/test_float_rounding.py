@@ -1,5 +1,5 @@
 """
-Self-test for default float rounding (4 dp) in umsgpack.
+Self-test for umsgpack float round-trip tolerance on MicroPython.
 
 Run with:
     import umsgpack.test_float_rounding
@@ -10,17 +10,16 @@ Raises AssertionError on failure.
 import umsgpack
 
 
-def _fmt(val):
-    digits = umsgpack.float_round_digits
-    return ("{0:." + str(digits) + "f}").format(val)
+def _decode_with_tolerance(value, tol):
+    buf = umsgpack.dumps(value)
+    decoded = umsgpack.loads(buf)
+    assert abs(decoded - value) < tol, "decoded %r expected ~%r" % (decoded, value)
+    print("ok", value, "->", decoded)
 
 
 def _check_float(value):
-    buf = umsgpack.dumps(value)
-    decoded = umsgpack.loads(buf)
-    expected = round(value, umsgpack.float_round_digits)
-    assert _fmt(decoded) == _fmt(expected), "decoded %r expected %r" % (decoded, expected)
-    print("ok", value, "->", decoded)
+    # Use a tolerance suitable for single precision; double precision will trivially pass it
+    _decode_with_tolerance(value, tol=1e-4)
 
 
 def _check_int(value):
@@ -35,7 +34,7 @@ def main():
         _check_float(v)
     for i in (0, 1, 42, -7):
         _check_int(i)
-    print("umsgpack float rounding self-test: PASS")
+    print("umsgpack float tolerance self-test: PASS")
 
 
 if __name__ == "__main__":

@@ -2,32 +2,31 @@ import time
 import gc
 
 import uasyncio as asyncio
+from adapters.config_manager import CFG
 
-from logging import LOG
-
+# from logging import LOG
+from logging import Logger, DEBUG
+LOG = Logger('root', DEBUG)
 
 class Supervisor:
     def __init__(self):
         from domain.state import DeviceState
-        from adapters.config_manager import ConfigManager
         from domain.device_service import DeviceService
         from adapters.wamp_bridge import WampBridge
         from domain.stats import StatsManager
 
-        self.cfg_mgr = ConfigManager()
-        self.cfg_mgr.load()
+        CFG.load()
 
         self.stats = StatsManager()
         self.stats.load()
 
         # DeviceState owns alerts manager; use it directly
-        self.state = DeviceState(self.cfg_mgr.device_id, stats_mgr=self.stats)
+        self.state = DeviceState(CFG.device_id, stats_mgr=self.stats)
 
-        self.is_provisioning = not (self.cfg_mgr.cfg.get("wifi").get("ssid") or "").strip()
+        self.is_provisioning = not ((CFG.data.get("wifi") or {}).get("ssid") or "").strip()
         # Initialize centralized device service
         self.service = DeviceService(
             self.state,
-            self.cfg_mgr,
             self.schedule_reboot,
             stats_mgr=self.stats,
         )
@@ -50,7 +49,7 @@ class Supervisor:
         self.http_server = None
         self.http_api = None
 
-        self.wamp = WampBridge(self.cfg_mgr.cfg, self.service)
+        self.wamp = WampBridge(self.service)
 
         gc.collect()
 
@@ -79,16 +78,12 @@ class Supervisor:
             reset()
 
     def _local_minutes(self):
-        tz = int(self.cfg_mgr.cfg.get("schedule", {}).get("tz_offset_min", 0))
-        t = time.time() + tz * 60
-        lt = time.localtime(t)
+        lt = time.localtime(time.time())
         return lt[3] * 60 + lt[4]
 
     def _local_time(self):
         """Return (minutes_from_midnight, seconds)"""
-        tz = int(self.cfg_mgr.cfg.get("schedule", {}).get("tz_offset_min", 0))
-        t = time.time() + tz * 60
-        lt = time.localtime(t)
+        lt = time.localtime(time.time())
         return (lt[3] * 60 + lt[4], lt[5])
 
     def _init_hw(self):
@@ -100,8 +95,7 @@ class Supervisor:
         from drivers.flowsensor import FlowSensor, flowtypes
         from domain.dosing import DosingController
 
-        cfg = self.cfg_mgr.cfg
-        pwm_cfg = cfg["outputs"]["pwm"]
+        pwm_cfg = CFG.data["outputs"]["pwm"]
 
         # pca_cfg = self.cfg["outputs"]["pca9685"]
         # if pca_cfg.get("enabled", True):
@@ -113,7 +107,7 @@ class Supervisor:
         #     pca.set_pwm_freq(int(pca_cfg.get("pwm_freq",1000)))
         #     self.switchbank = SwitchBank(pca, channels=int(pca_cfg.get("channels",16)))
 
-        fcfg = cfg["flow"]
+        fcfg = CFG.data["flow"]
         ppl = flowtypes.get(fcfg.get("type", "YFS401"))
         self.service.pwm = PwmOut(pwm_cfg["pin"], pwm_cfg.get("freq", 1000), pwm_cfg.get("active_low", False))
 
@@ -126,7 +120,6 @@ class Supervisor:
         # refactor this instantiation into service
         self.service.dosing = DosingController(self.service.flow,
                                                self.service.pwm,
-                                               self.cfg_mgr.cfg,
                                                state=self.state,
                                                stats=self.stats,
                                                activity_update=self.wamp.publish_status)
@@ -169,38 +162,39 @@ class Supervisor:
             await asyncio.sleep_ms(200)
 
     async def task_ntp(self):
-        from adapters.ntp import sync as ntp_sync
-        cfg = self.cfg_mgr.cfg.get("ntp", {})
-        every = int(cfg.get("sync_every_s", 21600))
-        host = cfg.get("host", "pool.ntp.org")
+        from adapters.device import sync_rtc_via_ntp
+        ntp_cfg = CFG.data.get("ntp", {})
+        every = int(ntp_cfg.get("sync_every_s", 21600))
+        host = ntp_cfg.get("host", "pool.ntp.org")
+        tz_offset = int(CFG.data.get("tz_offset_min", 0))
         initial_sync = True
 
         while True:
             if self.wifi.is_connected():
-                success = await ntp_sync(host)
+                success = await sync_rtc_via_ntp(host, retries=3, tz_offset_min=tz_offset)
                 self.state.ntp_ok = bool(success)
                 if success:
-                    if LOG: LOG.debug("NTP: synced")
+                    LOG.debug("NTP: synced")
                     if initial_sync:
                         initial_sync = False
                         await asyncio.sleep(every)
                     else:
                         await asyncio.sleep(every)
                 else:
-                    if LOG: LOG.debug("NTP: sync failed")
+                    LOG.debug("NTP: sync failed")
                     retry_interval = 10 if initial_sync else 60
                     await asyncio.sleep(retry_interval)
             else:
                 await asyncio.sleep(5)
 
     async def task_flow(self):
-        interval_ms = int(self.cfg_mgr.cfg["flow"].get("read_interval_ms", 1000))
+        interval_ms = int(CFG.data["flow"].get("read_interval_ms", 1000))
         next_ms = time.ticks_add(time.ticks_ms(), interval_ms)
         while True:
             now = time.ticks_ms()
             if time.ticks_diff(now, next_ms) >= 0:
                 flow = self.service.flow
-                flow.read(calibration=int(self.cfg_mgr.cfg["flow"].get("calibration", 0)))
+                flow.read(calibration=int(CFG.data["flow"].get("calibration", 0)))
                 self.state.flow_lps = flow.flow_lps
                 self.state.flow_lpm = flow.flow_lpm
                 self.state.volume_l = flow.volume_l
@@ -216,7 +210,7 @@ class Supervisor:
         while True:
             # Skip schedule if override is active or dosing is active
             if not self.service.pwm_override and not (self.service.dosing and self.service.dosing.is_dosing):
-                sched = self.cfg_mgr.cfg.get("schedule", {}).get("pwm", [])
+                sched = CFG.data.get("schedule", {}).get("pwm", [])
                 # config disabled
                 if sched:
                     mins, secs = self._local_time()
@@ -235,7 +229,7 @@ class Supervisor:
     async def task_pwm_test_btn(self):
         from machine import Pin
 
-        btn_cfg = self.cfg_mgr.cfg.get("inputs", {}).get("pwm_test_btn", {})
+        btn_cfg = CFG.data.get("inputs", {}).get("pwm_test_btn", {})
         pin_num = btn_cfg.get("pin")
         if not pin_num:
             LOG.error("task_pwm_test_btn: button pin not set")
@@ -361,7 +355,9 @@ class Supervisor:
                 await self.service.dosing.update(mins)
                 # Update state with current dosing status
                 self.state.dosing_status = self.service.dosing.get_dose_status()
-            await asyncio.sleep(0.5)  # Update twice per second for precision
+
+            await asyncio.sleep(2)  # debug
+            #await asyncio.sleep(0.5)  # Update twice per second for precision
 
     async def run(self):
         import gc

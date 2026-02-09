@@ -9,6 +9,7 @@ def get_device_id():
 
 def default_cfg():
     return {
+        "tz_offset_min": 120,
         "wifi": {"ssid": "", "password": ""},
         "wamp": {
             "url": "wss://plantae.robits.org/ws",
@@ -50,20 +51,24 @@ def _validate(cfg):
 class ConfigManager:
     def __init__(self, path="config.mpk"):
         self.path = path
-        self.cfg = None
+        self.data = None
         self.device_id = get_device_id()
 
     def load(self):
-        self.cfg = _validate(load_with_default(self.path, default_cfg))
-        return self.cfg
+        self.data = _validate(load_with_default(self.path, default_cfg))
+        return self.data
 
     def update(self, patch: dict):
-        if self.cfg is None:
+        if self.data is None:
             self.load()
         if isinstance(patch, dict):
-            merge(self.cfg, patch)
-            self.cfg = _validate(self.cfg)
-        return self.cfg
+            merge(self.data, patch)
+            self.data = _validate(self.data)
+        return self.data
 
     def save(self):
-        atomic_save(self.path, self.cfg)
+        atomic_save(self.path, self.data)
+
+
+# Module-level singleton for shared config access
+CFG = ConfigManager()

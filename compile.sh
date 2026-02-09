@@ -49,7 +49,7 @@ FILES=(
     "adapters/wamp_bridge.py"
     "adapters/config_manager.py"
     "adapters/wifi.py"
-    "adapters/ntp.py"
+    "adapters/device.py"
     "adapters/http_api.py"
 
     "app/supervisor.py"

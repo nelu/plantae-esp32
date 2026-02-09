@@ -1,6 +1,6 @@
 # Dosing Functionality
 
-This document describes the volumetric dosing functionality implemented in the Plantae system.
+This document describes the volumetric dosing functionality implemented in the Plantae system. All schedule times are specified in UTC; convert local time to UTC before writing config or provisioning.
 
 ## Configuration
 

@@ -1,14 +1,17 @@
 import uasyncio as asyncio
 
 from domain.state import DeviceState
-from logging import LOG
+#from logging import LOG
 import time
+from logging import Logger, DEBUG
+from adapters.config_manager import CFG
+LOG = Logger('dosing', DEBUG)
 
 class DosingController:
-    def __init__(self, flow_sensor, output_controller, config, state=None, stats=None, alerts_mgr=None, activity_update=None):
+    def __init__(self, flow_sensor, output_controller, state=None, stats=None, alerts_mgr=None, activity_update=None):
         self.flow_sensor = flow_sensor
         self.output_controller = output_controller
-        self.config = config
+        self.config = CFG.data
         self.state = state
         self.stats = stats
         self.is_dosing = False
@@ -16,7 +19,6 @@ class DosingController:
         self.target_quantity = 0.0
         self.dose_start_time = 0
         self.timeout_s = 60  # 5 minute timeout for safety
-        self.tz_offset_min = int(self.config.get("schedule", {}).get("tz_offset_min", 0))
         self.last_auto_dose_day = -1  # Track daily auto-dosing (local day)
         self.activity_update = activity_update
         if self.stats:
@@ -34,16 +36,16 @@ class DosingController:
 
     def _local_wday(self):
         """Return local weekday index (Mon=0..Sun=6) using tz offset"""
-        t = self._unix_now() + self.tz_offset_min * 60
-        lt = time.localtime(t)
+        lt = time.localtime(time.time())
         return int(lt[6])
 
     def _current_local_day(self):
         """Day number since epoch in local time (tz adjusted)"""
-        return int((self._unix_now() + self.tz_offset_min * 60) // 86400)
+        t = time.time()
+        return int(t // 86400)
 
     def _ts_to_local_day(self, ts):
-        return int((int(ts) + self.tz_offset_min * 60) // 86400)
+        return int(int(ts) // 86400)
 
     @staticmethod
     def _unix_now():
@@ -172,12 +174,15 @@ class DosingController:
 
         current_day = self._current_local_day()
         if self.last_auto_dose_day >= 0 and current_day <= self.last_auto_dose_day:
+            # LOG.debug('not in dosing days last %s current %s', str(self.last_auto_dose_day), str(current_day))
             return
 
         day_idx = self._local_wday()
         start_str = days[day_idx]
         if not start_str:
             return
+
+        LOG.debug('today %s dosing schedule %s', day_idx, start_str)
 
         try:
             start_min = self._parse_time(str(start_str))

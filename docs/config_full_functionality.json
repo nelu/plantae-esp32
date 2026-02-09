@@ -47,8 +47,8 @@
       "pwm_freq": 1000
     }
   },
+    "tz_offset_min": 120,
     "schedule": {
-      "tz_offset_min": 120,
       "pwm": [
         {
           "start": "20:00",
