@@ -1,6 +1,6 @@
 import uasyncio as asyncio
 
-from domain.state import DeviceState
+from adapters.datetime import current_local_day, local_wday, parse_hhmm, ts_to_local_day
 #from logging import LOG
 import time
 from logging import Logger, DEBUG
@@ -11,53 +11,34 @@ class DosingController:
     def __init__(self, flow_sensor, output_controller, state=None, stats=None, alerts_mgr=None, activity_update=None):
         self.flow_sensor = flow_sensor
         self.output_controller = output_controller
-        self.config = CFG.data
         self.state = state
         self.stats = stats
         self.is_dosing = False
         self.dose_start_volume = 0.0
         self.target_quantity = 0.0
         self.dose_start_time = 0
-        self.timeout_s = 60  # 5 minute timeout for safety
+        self.timeout_s = 60  # 1 minute timeout for safety
         self.last_auto_dose_day = -1  # Track daily auto-dosing (local day)
         self.activity_update = activity_update
         if self.stats:
             try:
                 ts = int(self.stats.data.get("last_dose_ts", 0) or 0)
-                ts_local_day = self._ts_to_local_day(ts) if ts > 0 else -1
+                ts_local_day = ts_to_local_day(ts) if ts > 0 else -1
                 self.last_auto_dose_day = ts_local_day
             except Exception:
                 self.last_auto_dose_day = -1
-        
-    def _parse_time(self, time_str):
-        """Parse HH:MM format to minutes since midnight"""
-        h, m = time_str.split(":")
-        return int(h) * 60 + int(m)
 
-    def _local_wday(self):
-        """Return local weekday index (Mon=0..Sun=6) using tz offset"""
-        lt = time.localtime(time.time())
-        return int(lt[6])
-
-    def _current_local_day(self):
-        """Day number since epoch in local time (tz adjusted)"""
-        t = time.time()
-        return int(t // 86400)
-
-    def _ts_to_local_day(self, ts):
-        return int(int(ts) // 86400)
-
-    @staticmethod
-    def _unix_now():
-        return int(time.time()) + DeviceState.UNIX_EPOCH_OFFSET
+    def reset_last_auto_dose_day(self):
+        self.last_auto_dose_day = -1
+        LOG.info("Reset last automatic dose day; schedule eligible immediately")
     
     async def start_dose(self, quantity_l, is_manual=False):
         """Start dosing a specific quantity in milliliters"""
         if self.is_dosing:
             LOG.warning("Dosing already in progress")
             return False
-            
-        dosing_cfg = self.config.get("schedule", {}).get("dosing", {})
+
+        dosing_cfg = CFG.data.get("schedule", {}).get("dosing", {})
         output_name = dosing_cfg.get("output", "pwm")
         output_duty = dosing_cfg.get("duty", 0.5)
 
@@ -158,7 +139,7 @@ class DosingController:
 
             if not self._is_manual_dose and self.stats:
                 self.stats.record_dose(time.time(), persist_immediately=True)
-                self.last_auto_dose_day = self._current_local_day()
+                self.last_auto_dose_day = current_local_day()
             self.stop_dose()
             return
             
@@ -167,17 +148,17 @@ class DosingController:
         if self.is_dosing:  # Don't auto-dose if already dosing
             return
             
-        dosing_cfg = self.config.get("schedule", {}).get("dosing", {})
+        dosing_cfg = CFG.data.get("schedule", {}).get("dosing", {})
         days = dosing_cfg.get("days") or []
         if not isinstance(days, list) or len(days) != 7:
             return
 
-        current_day = self._current_local_day()
+        current_day = current_local_day()
         if self.last_auto_dose_day >= 0 and current_day <= self.last_auto_dose_day:
             # LOG.debug('not in dosing days last %s current %s', str(self.last_auto_dose_day), str(current_day))
             return
 
-        day_idx = self._local_wday()
+        day_idx = local_wday()
         start_str = days[day_idx]
         if not start_str:
             return
@@ -185,7 +166,7 @@ class DosingController:
         LOG.debug('today %s dosing schedule %s', day_idx, start_str)
 
         try:
-            start_min = self._parse_time(str(start_str))
+            start_min = parse_hhmm(str(start_str))
         except Exception:
             LOG.error("Invalid dosing time for day %d: %s", day_idx, start_str)
             return

@@ -8,6 +8,20 @@ import time
 import sys
 import os
 
+# Provide a stub machine.unique_id if the platform lacks it (e.g., unix port).
+try:
+    import machine as _machine  # type: ignore
+    if hasattr(_machine, "unique_id"):
+        machine = _machine
+    else:
+        raise ImportError
+except Exception:
+    class _MachineStub:
+        pass
+    machine = _MachineStub()
+    machine.unique_id = lambda: b"\x00\x01\x02\x03\x04\x05"
+    sys.modules["machine"] = machine
+
 try:
     import asyncio
 except ImportError:  # MicroPython fallback
@@ -126,6 +140,7 @@ class TestDosingController(unittest.TestCase):
             from src.adapters.config_manager import CFG
             CFG.data = self.cfg
             self.controller = DosingController(self.flow_sensor, self.pwm_out)
+            self.controller.config = self.cfg
         except ImportError:
             self.skipTest("DosingController not available (MicroPython only)")
     
@@ -168,6 +183,12 @@ class TestDosingController(unittest.TestCase):
         result = self.controller.stop_dose()
         
         self.assertFalse(result)
+
+    def test_reset_last_auto_dose_day(self):
+        self.controller.last_auto_dose_day = 7
+        self.controller.reset_last_auto_dose_day()
+
+        self.assertEqual(self.controller.last_auto_dose_day, -1)
     
     def test_get_dose_status_inactive(self):
         """Test getting status when inactive"""
@@ -212,31 +233,50 @@ class TestDosingController(unittest.TestCase):
         _stub.localtime = lambda t=None: time.gmtime(t)
         try:
             dosing.time = _stub
-            self.assertEqual(self.controller._local_wday(), 0)
+            self.assertEqual(dosing.local_wday(), 0)
         finally:
             dosing.time = orig_time_mod
 
     async def test_update_triggers_auto_dose_for_today(self):
         """Auto dosing starts when today's slot is set and not yet dosed"""
-        self.controller._local_wday = lambda: 0
-        self.controller._current_local_day = lambda: 123
-        await self.controller.update(17 * 60)
-        self.assertTrue(self.controller.is_dosing)
-        self.assertEqual(self.controller.last_auto_dose_day, 123)
+        import src.domain.dosing as dosing
+        orig_wday, orig_day = dosing.local_wday, dosing.current_local_day
+        dosing.local_wday = lambda: 0
+        dosing.current_local_day = lambda: 123
+        try:
+            await self.controller.update(17 * 60)
+            self.assertTrue(self.controller.is_dosing)
+            self.assertEqual(self.controller.last_auto_dose_day, 123)
+        finally:
+            dosing.local_wday = orig_wday
+            dosing.current_local_day = orig_day
 
     async def test_update_skips_empty_day(self):
-        self.controller.config["schedule"]["dosing"]["days"][0] = ""
-        self.controller._local_wday = lambda: 0
-        self.controller._current_local_day = lambda: 200
-        await self.controller.update(17 * 60)
-        self.assertFalse(self.controller.is_dosing)
+        from src.adapters.config_manager import CFG
+        import src.domain.dosing as dosing
+        CFG.data["schedule"]["dosing"]["days"][0] = ""
+        orig_wday, orig_day = dosing.local_wday, dosing.current_local_day
+        dosing.local_wday = lambda: 0
+        dosing.current_local_day = lambda: 200
+        try:
+            await self.controller.update(17 * 60)
+            self.assertFalse(self.controller.is_dosing)
+        finally:
+            dosing.local_wday = orig_wday
+            dosing.current_local_day = orig_day
 
     async def test_update_skips_if_already_dosed_today(self):
-        self.controller._local_wday = lambda: 0
-        self.controller._current_local_day = lambda: 300
+        import src.domain.dosing as dosing
+        orig_wday, orig_day = dosing.local_wday, dosing.current_local_day
+        dosing.local_wday = lambda: 0
+        dosing.current_local_day = lambda: 300
         self.controller.last_auto_dose_day = 300
-        await self.controller.update(17 * 60)
-        self.assertFalse(self.controller.is_dosing)
+        try:
+            await self.controller.update(17 * 60)
+            self.assertFalse(self.controller.is_dosing)
+        finally:
+            dosing.local_wday = orig_wday
+            dosing.current_local_day = orig_day
 
 
 def run_async_test(coro):

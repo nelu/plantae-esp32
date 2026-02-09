@@ -39,6 +39,8 @@ class MockService:
         self.dosing.start_dose = AsyncMock(return_value=True)
         self.dosing.stop_dose = Mock(return_value=True)
         self.dosing.get_dose_status = Mock(return_value={"active": False})
+        self.dosing.last_auto_dose_day = None
+        self.dosing.reset_last_auto_dose_day = Mock(side_effect=lambda: setattr(self.dosing, "last_auto_dose_day", -1))
         self.stats = Mock()
         self.alerts = Mock()
         self.alerts.data = {}
@@ -159,6 +161,16 @@ class TestWampBridge(unittest.TestCase):
     async def test_rpc_dose_set_schedule_invalid_days_length(self):
         result = await self.bridge.rpc_dose([], {"action": "set_schedule", "dosing": {"days": ["10:00"]}}, {})
         self.assertEqual(result.get("error"), "invalid_field")
+
+    async def test_rpc_dose_set_schedule_resets_last_auto_day(self):
+        days = ["08:00"] * 7
+        self.service.dosing.last_auto_dose_day = 123
+
+        result = await self.bridge.rpc_dose([], {"action": "set_schedule", "dosing": {"days": days}}, {})
+
+        self.assertEqual(result.get("status"), "updated")
+        self.service.dosing.reset_last_auto_dose_day.assert_called_once()
+        self.assertEqual(self.service.dosing.last_auto_dose_day, -1)
 
     async def test_rpc_dose_set_schedule_invalid_time(self):
         days = ["10:00"] * 7

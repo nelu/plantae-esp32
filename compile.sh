@@ -50,6 +50,7 @@ FILES=(
     "adapters/config_manager.py"
     "adapters/wifi.py"
     "adapters/device.py"
+    "adapters/datetime.py"
     "adapters/http_api.py"
 
     "app/supervisor.py"

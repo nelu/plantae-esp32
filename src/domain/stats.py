@@ -1,6 +1,6 @@
 import time
 
-from domain.state import DeviceState
+from adapters.datetime import DEFAULT_UNIX_EPOCH_OFFSET
 from lib.file_store import PersistentManager
 
 
@@ -18,7 +18,7 @@ class StatsManager(PersistentManager):
 
         self._last_volume_l = None
         self._last_pwm_sample_ms = time.ticks_ms()
-        self.epoch_offset = DeviceState.UNIX_EPOCH_OFFSET
+        self.epoch_offset = DEFAULT_UNIX_EPOCH_OFFSET
 
     def attach_state(self, state):
         # Deprecated: state binding removed; only track last volume for delta calculations when provided

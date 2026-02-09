@@ -1,12 +1,12 @@
 import time, gc
 
 from lib.file_store import PersistentManager
+from adapters.datetime import DEFAULT_UNIX_EPOCH_OFFSET
 
 
 class AlertManager(PersistentManager):
     def __init__(self, path="alerts.mpk", save_interval_s=60, initial=None):
         super().__init__(path, save_interval_s, initial=initial, default_factory=self.default)
-        self.epoch_offset = DeviceState.UNIX_EPOCH_OFFSET
 
     def default(self):
         return {}
@@ -40,7 +40,6 @@ class AlertManager(PersistentManager):
 
 
 class DeviceState:
-    UNIX_EPOCH_OFFSET = 946684800
 
     def __init__(self, device_id, stats_mgr=None):
         from version import VERSION, BUILD_DATE
@@ -77,7 +76,7 @@ class DeviceState:
         return {
             "id": self.device_id,
             "ip": self.ip,
-            "utc": time.time() + self.UNIX_EPOCH_OFFSET,
+            "utc": time.time() + DEFAULT_UNIX_EPOCH_OFFSET,
             "uptime_s": self.uptime_s(),
             "heap": gc.mem_free(),
             "flow": {"lps": self.flow_lps, "lpm": self.flow_lpm, "vol_l": self.volume_l, "pulses": self.pulses},

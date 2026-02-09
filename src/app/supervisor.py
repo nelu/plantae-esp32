@@ -3,6 +3,7 @@ import gc
 
 import uasyncio as asyncio
 from adapters.config_manager import CFG
+from adapters.datetime import local_minutes, local_time_tuple
 
 # from logging import LOG
 from logging import Logger, DEBUG
@@ -76,15 +77,6 @@ class Supervisor:
                 LOG.error("shutdown before reset failed: %s", e)
             from machine import reset
             reset()
-
-    def _local_minutes(self):
-        lt = time.localtime(time.time())
-        return lt[3] * 60 + lt[4]
-
-    def _local_time(self):
-        """Return (minutes_from_midnight, seconds)"""
-        lt = time.localtime(time.time())
-        return (lt[3] * 60 + lt[4], lt[5])
 
     def _init_hw(self):
         # from drivers.pca9685 import PCA9685
@@ -213,7 +205,7 @@ class Supervisor:
                 sched = CFG.data.get("schedule", {}).get("pwm", [])
                 # config disabled
                 if sched:
-                    mins, secs = self._local_time()
+                    mins, secs = local_time_tuple()
                     duty = duty_from_schedule(sched, mins, secs)
                     self.service.pwm.set(duty)
                     self.state.pwm_duty = duty
@@ -351,7 +343,7 @@ class Supervisor:
         LOG.debug("task_dosing: started")
         while True:
             if self.service.dosing:
-                mins = self._local_minutes()
+                mins = local_minutes()
                 await self.service.dosing.update(mins)
                 # Update state with current dosing status
                 self.state.dosing_status = self.service.dosing.get_dose_status()

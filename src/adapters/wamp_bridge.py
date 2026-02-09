@@ -273,6 +273,7 @@ class WampBridge:
                 new_cfg["quantity"] = qty
 
             self.service.patch_config({"schedule": {"dosing": new_cfg}})
+            self.service.dosing.reset_last_auto_dose_day()
             return {"status": "updated"}
 
         elif action == "stop":
