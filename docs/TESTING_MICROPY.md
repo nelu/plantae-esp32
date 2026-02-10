@@ -7,13 +7,13 @@ Use the MicroPython unix image to run the self-tests that target the bundled
 Set MICROPYPATH so project modules and the optional `lib/` directory are found:
 
 ```sh
-MICROPY_CMD="docker run --rm -v \"%cd%\":/app -w /app -e MICROPYPATH=/app:/app/lib:/app/src/lib:/app/src micropython/unix:v1.27.0 micropython"
+MICROPY_CMD="docker run --rm -v \"%cd%\":/app -w /app -e MICROPYPATH=/app:/app/libs:/app/src/lib:/app/src micropython/unix:v1.27.0 micropython"
 ```
 
 Install unittest into the working tree (once per clean tree) so MicroPython can import it:
 
 ```sh
-docker run --rm -v "%cd%":/app -w /app micropython/unix:v1.27.0 micropython -c "import mip; mip.install('unittest', target='/app/lib')"
+docker run --rm -v "%cd%":/app -w /app micropython/unix:v1.27.0 micropython -c "import mip; mip.install('unittest', target='/app/libs')"
 ```
 
 Run the tests:
