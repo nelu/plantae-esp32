@@ -3,11 +3,11 @@ import gc
 
 import uasyncio as asyncio
 from adapters.config_manager import CFG
-from adapters.datetime import local_minutes, local_time_tuple
+from app import tasks
 
-# from logging import LOG
-from logging import Logger, DEBUG
-LOG = Logger('root', DEBUG)
+from logging import LOG
+# from logging import Logger, DEBUG
+# LOG = Logger('root', DEBUG)
 
 class Supervisor:
     def __init__(self):
@@ -78,294 +78,21 @@ class Supervisor:
             from machine import reset
             reset()
 
-    def _init_hw(self):
-        # from drivers.pca9685 import PCA9685
-        # from machine import I2C, Pin
-        # from domain.controllers import SwitchBank
-
-        from drivers.pwm_out import PwmOut
-        from drivers.flowsensor import FlowSensor, flowtypes
-        from domain.dosing import DosingController
-
-        pwm_cfg = CFG.data["outputs"]["pwm"]
-
-        # pca_cfg = self.cfg["outputs"]["pca9685"]
-        # if pca_cfg.get("enabled", True):
-        #     i2c = I2C(int(pca_cfg.get("i2c_id",0)),
-        #               scl=Pin(int(pca_cfg.get("scl",22))),
-        #               sda=Pin(int(pca_cfg.get("sda",21))),
-        #               freq=int(pca_cfg.get("freq",400000)))
-        #     pca = PCA9685(i2c, int(pca_cfg.get("addr",64)))
-        #     pca.set_pwm_freq(int(pca_cfg.get("pwm_freq",1000)))
-        #     self.switchbank = SwitchBank(pca, channels=int(pca_cfg.get("channels",16)))
-
-        fcfg = CFG.data["flow"]
-        ppl = flowtypes.get(fcfg.get("type", "YFS401"))
-        self.service.pwm = PwmOut(pwm_cfg["pin"], pwm_cfg.get("freq", 1000), pwm_cfg.get("active_low", False))
-
-        # Initialize dosing controller
-        # self.dosing_controller =DosingController(self.service.flow, self.service.pwm, self.cfg)
-
-        # Update service with initialized components
-        self.service.flow = FlowSensor(ppl, fcfg.get("pin", 34))
-        self.service.flow.begin(pullup=bool(fcfg.get("pullup_external", True)))
-        # refactor this instantiation into service
-        self.service.dosing = DosingController(self.service.flow,
-                                               self.service.pwm,
-                                               state=self.state,
-                                               stats=self.stats,
-                                               activity_update=self.wamp.publish_status)
-        # self.service.switches = self.switchbank
-
-    async def task_wifi_status(self):
-        """Update IP/signal without managing reconnects."""
-        while True:
-            try:
-                if not self.wifi:
-                    await asyncio.sleep(5)
-                    continue
-
-                if self.is_provisioning:
-                    if hasattr(self.wifi, "ap_ip"):
-                        new_ip = self.wifi.ap_ip()
-                        if self.state.ip != new_ip:
-                            self.state.ip = new_ip
-                            if LOG: LOG.info("AP IP: %s", self.state.ip)
-                else:
-                    if self.wifi.is_connected():
-                        new_ip = self.wifi.ip()
-                        if self.state.ip != new_ip:
-                            self.state.ip = new_ip
-                            if LOG: LOG.info("WiFi IP: %s", self.state.ip)
-                        try:
-                            self.state.signal = self.wifi.get_rssi()
-                        except Exception:
-                            pass
-                    else:
-                        self.state.ip = "0.0.0.0"
-            except Exception as e:
-                if LOG: LOG.error("WiFi Status Error: %s", e)
-
-            await asyncio.sleep(5)
-
-    async def task_reboot_watch(self):
-        while True:
-            self._maybe_reboot()
-            await asyncio.sleep_ms(200)
-
-    async def task_ntp(self):
-        from adapters.device import sync_rtc_via_ntp
-        ntp_cfg = CFG.data.get("ntp", {})
-        every = int(ntp_cfg.get("sync_every_s", 21600))
-        host = ntp_cfg.get("host", "pool.ntp.org")
-        tz_offset = int(CFG.data.get("tz_offset_min", 0))
-        initial_sync = True
-
-        while True:
-            if self.wifi.is_connected():
-                success = await sync_rtc_via_ntp(host, retries=3, tz_offset_min=tz_offset)
-                self.state.ntp_ok = bool(success)
-                if success:
-                    LOG.debug("NTP: synced")
-                    if initial_sync:
-                        initial_sync = False
-                        await asyncio.sleep(every)
-                    else:
-                        await asyncio.sleep(every)
-                else:
-                    LOG.debug("NTP: sync failed")
-                    retry_interval = 10 if initial_sync else 60
-                    await asyncio.sleep(retry_interval)
-            else:
-                await asyncio.sleep(5)
-
-    async def task_flow(self):
-        interval_ms = int(CFG.data["flow"].get("read_interval_ms", 1000))
-        next_ms = time.ticks_add(time.ticks_ms(), interval_ms)
-        while True:
-            now = time.ticks_ms()
-            if time.ticks_diff(now, next_ms) >= 0:
-                flow = self.service.flow
-                flow.read(calibration=int(CFG.data["flow"].get("calibration", 0)))
-                self.state.flow_lps = flow.flow_lps
-                self.state.flow_lpm = flow.flow_lpm
-                self.state.volume_l = flow.volume_l
-                self.state.pulses = flow.pulses_total
-                if self.stats:
-                    self.stats.accumulate_volume(self.state.volume_l)
-                next_ms = time.ticks_add(now, interval_ms)
-            await asyncio.sleep_ms(20)
-
-    async def task_pwm_schedule(self):
-        from domain.scheduler import duty_from_schedule
-
-        while True:
-            # Skip schedule if override is active or dosing is active
-            if not self.service.pwm_override and not (self.service.dosing and self.service.dosing.is_dosing):
-                sched = CFG.data.get("schedule", {}).get("pwm", [])
-                # config disabled
-                if sched:
-                    mins, secs = local_time_tuple()
-                    duty = duty_from_schedule(sched, mins, secs)
-                    self.service.pwm.set(duty)
-                    self.state.pwm_duty = duty
-            await asyncio.sleep(1)
-
-    async def task_stats(self):
-        while True:
-            if self.stats:
-                self.stats.track_pwm_runtime(self.state.pwm_duty)
-                self.stats.save_if_needed()
-            await asyncio.sleep(1)
-
-    async def task_pwm_test_btn(self):
-        from machine import Pin
-
-        btn_cfg = CFG.data.get("inputs", {}).get("pwm_test_btn", {})
-        pin_num = btn_cfg.get("pin")
-        if not pin_num:
-            LOG.error("task_pwm_test_btn: button pin not set")
-            return  # No button configured
-
-        active_low = btn_cfg.get("active_low", True)
-        test_duty = btn_cfg.get("test_duty", 1.0)
-
-        btn = Pin(pin_num, Pin.IN)
-        button_override_active = False
-
-        while True:
-            state = btn.value()
-            pressed = (state == 0) if active_low else (state == 1)
-
-            if pressed and not button_override_active:
-                # Button just pressed - activate test mode
-                button_override_active = True
-                self.service.set_pwm_manual(test_duty, True, source="button")
-            elif not pressed and button_override_active:
-                # Button released - return to schedule
-                button_override_active = False
-                self.service.set_pwm_manual(0, False, source="button")
-
-            await asyncio.sleep_ms(50)
-
-    async def task_http(self):
-        if self.http_server is None:
-            if self.is_provisioning:
-                from app.provision import ProvisionHttp
-                self.http_api = ProvisionHttp(
-                    self.service,
-                    self.wifi
-                )
-            else:
-                from adapters.http_api import HttpApi
-                self.http_api = HttpApi(self.service)
-
-            self.http_server = await self.http_api.serve(port=80)
-            LOG.info("task_http: listening on :80")
-
-        evt = asyncio.Event()
-        await evt.wait()
-
-
-    async def task_wamp(self):
-        LOG.info("task_wamp: started")
-        ntp_quiet_done = False
-        fail_count = 0
-
-        while True:
-            if not self.wifi.is_connected():
-                await asyncio.sleep(2)
-                continue
-
-            if not self.state.ntp_ok:
-                await asyncio.sleep(2)
-                continue
-
-            if not ntp_quiet_done:
-                ntp_quiet_done = True
-                await asyncio.sleep(3)
-
-            try:
-                LOG.info("task_wamp: start run_forever. Signal: %d, Free: %d", self.state.signal, gc.mem_free())
-                gc.collect()
-                await asyncio.sleep_ms(0)
-
-                await self.wamp.start(timeout_s=20)
-                fail_count = 0
-
-                while True:
-                    if self.wamp._runner and self.wamp._runner.done():
-                        raise RuntimeError("wamp runner stopped")
-                    if self.wamp.is_alive():
-                        await self.wamp.publish_status()
-                    await asyncio.sleep(1)
-                    gc.collect()
-
-            except Exception as e:
-                self.state.wamp_ok = False
-                self.state.last_error = (e,)
-                LOG.error("task_wamp: %r", e)
-
-                try:
-                    await self.wamp.close()
-                except Exception as e:
-                    LOG.error('task_wamp: wamp close error - %r', e)
-                finally:
-                    gc.collect()
-                    await asyncio.sleep_ms(0)
-
-                fail_count += 1
-                if fail_count > 10:
-                    LOG.error("task_wamp: Too many failures (%d). Rebooting...", fail_count)
-                    self.schedule_reboot()
-
-                msg = str(e)
-                eno = None
-                if isinstance(e, OSError) and e.args:
-                    eno = e.args[0]
-
-                if "send timeout" in msg:
-                    await asyncio.sleep(5)
-                elif "MBEDTLS" in msg or "ALLOC_FAILED" in msg or eno == 12:
-                    LOG.error("task_wamp: Memory/SSL error. Aggressive GC and Cooldown.")
-                    gc.collect()
-                    await asyncio.sleep(10)
-                elif eno == 16:
-                    gc.collect()
-                    await asyncio.sleep(4)
-                else:
-                    await asyncio.sleep(2)
-                gc.collect()
-
-
-    async def task_dosing(self):
-        """Update dosing controller regularly"""
-        LOG.debug("task_dosing: started")
-        while True:
-            if self.service.dosing:
-                mins = local_minutes()
-                await self.service.dosing.update(mins)
-                # Update state with current dosing status
-                self.state.dosing_status = self.service.dosing.get_dose_status()
-
-            await asyncio.sleep(2)  # debug
-            #await asyncio.sleep(0.5)  # Update twice per second for precision
-
     async def run(self):
         import gc
 
         try:
             LOG.info("supervisor: run")
 
-            asyncio.create_task(self.task_reboot_watch())
-            asyncio.create_task(self.task_wifi_status())
+            asyncio.create_task(tasks.task_reboot_watch(self))
+            asyncio.create_task(tasks.task_wifi_status(self))
 
             if self.is_provisioning:
                 from app.provision import dns_hijack_server
                 LOG.info("run: Provisioning mode")
 
                 asyncio.create_task(dns_hijack_server(ap_ip=self.wifi.ap_ip()))
-                asyncio.create_task(self.task_http())
+                asyncio.create_task(tasks.task_http(self))
 
                 # just idle; provisioning endpoint will save config + reboot
                 while True:
@@ -376,20 +103,20 @@ class Supervisor:
                 await asyncio.sleep(2)
 
             # normal mode continues:
-            asyncio.create_task(self.task_ntp())
+            asyncio.create_task(tasks.task_ntp(self))
 
             while not self.state.ntp_ok:
                 await asyncio.sleep(2)
                 continue
 
-            self._init_hw()
-            asyncio.create_task(self.task_flow())
-            asyncio.create_task(self.task_pwm_schedule())
-            asyncio.create_task(self.task_pwm_test_btn())
-            asyncio.create_task(self.task_dosing())
-            asyncio.create_task(self.task_stats())
+            self.service.init_hardware(CFG.data, activity_update=self.wamp.publish_status)
+            asyncio.create_task(tasks.task_flow(self))
+            asyncio.create_task(tasks.task_pwm_schedule(self))
+            asyncio.create_task(tasks.task_pwm_test_btn(self))
+            asyncio.create_task(tasks.task_dosing(self))
+            asyncio.create_task(tasks.task_stats(self))
 
-            asyncio.create_task(self.task_wamp())
+            asyncio.create_task(tasks.task_wamp(self))
 
             while not self.state.wamp_ok:
                 await asyncio.sleep(1)

@@ -79,7 +79,7 @@ for p in (
 
 # Force use of project logging module so LOG/Logger are available
 try:
-    import src.lib.logging as _proj_logging
+    import lib.logging as _proj_logging
     sys.modules["logging"] = _proj_logging
 except Exception:
     pass

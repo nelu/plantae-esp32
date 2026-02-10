@@ -1,6 +1,6 @@
 import time
 
-from adapters.datetime import DEFAULT_UNIX_EPOCH_OFFSET
+from lib.datetime import DEFAULT_UNIX_EPOCH_OFFSET
 from lib.file_store import PersistentManager
 
 

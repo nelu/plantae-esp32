@@ -10,8 +10,8 @@ class DeviceService:
     )
     def __init__(self, state, schedule_reboot, 
                  pwm_controller=None, flow_sensor=None, 
-                  dosing_controller=None, switchbank=None,
-                  stats_mgr=None):
+                   dosing_controller=None, switchbank=None,
+                   stats_mgr=None):
         self.state = state
         self._schedule_reboot = schedule_reboot
         self.flow = flow_sensor
@@ -25,6 +25,32 @@ class DeviceService:
         self.pwm_override = False
         self.pwm_override_source = None
         self.indicator = self._Indicator(5)
+
+
+    def init_hardware(self, cfg_data, activity_update=None):
+        """Initialize PWM, flow sensor, and dosing controller."""
+        from drivers.pwm_out import PwmOut
+        from drivers.flowsensor import FlowSensor, flowtypes
+        from domain.dosing import DosingController
+
+        pwm_cfg = cfg_data["outputs"]["pwm"]
+        fcfg = cfg_data["flow"]
+
+        ppl = flowtypes.get(fcfg.get("type", "YFS401"))
+        self.pwm = PwmOut(pwm_cfg["pin"], pwm_cfg.get("freq", 1000), pwm_cfg.get("active_low", False))
+
+        self.flow = FlowSensor(ppl, fcfg.get("pin", 34))
+        self.flow.begin(pullup=bool(fcfg.get("pullup_external", True)))
+
+        self.dosing = DosingController(
+            self.flow,
+            self.pwm,
+            state=self.state,
+            stats=self.stats,
+            activity_update=activity_update,
+        )
+
+        return True
 
 
     def get_status(self):

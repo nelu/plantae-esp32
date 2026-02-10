@@ -1,4 +1,4 @@
-from adapters.datetime import parse_hhmm
+from lib.datetime import parse_hhmm
 
 def duty_from_schedule(schedule, local_minutes, seconds=0):
     duty = 0.0

@@ -1,11 +1,14 @@
 import uasyncio as asyncio
 
-from adapters.datetime import current_local_day, local_wday, parse_hhmm, ts_to_local_day
-#from logging import LOG
+from lib.datetime import current_local_day, local_wday, parse_hhmm, ts_to_local_day
 import time
-from logging import Logger, DEBUG
+
+from logging import LOG
+
+# from logging import Logger, DEBUG
+# LOG = Logger('dosing', DEBUG)
+
 from adapters.config_manager import CFG
-LOG = Logger('dosing', DEBUG)
 
 class DosingController:
     def __init__(self, flow_sensor, output_controller, state=None, stats=None, alerts_mgr=None, activity_update=None):
@@ -163,7 +166,7 @@ class DosingController:
         if not start_str:
             return
 
-        LOG.debug('today %s dosing schedule %s', day_idx, start_str)
+        # LOG.debug('today %s dosing schedule %s', day_idx, start_str)
 
         try:
             start_min = parse_hhmm(str(start_str))

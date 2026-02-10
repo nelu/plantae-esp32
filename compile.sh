@@ -50,11 +50,11 @@ FILES=(
     "adapters/config_manager.py"
     "adapters/wifi.py"
     "adapters/device.py"
-    "adapters/datetime.py"
     "adapters/http_api.py"
 
     "app/supervisor.py"
     "app/provision.py"
+    "app/tasks.py"
 
     "domain/state.py"
     "domain/stats.py"
@@ -68,6 +68,7 @@ FILES=(
     "drivers/flowsensor.py"
 
 
+    "lib/datetime.py"
     "lib/file_store.py"
     "lib/mp_wamp_client.py"
 #    "lib/logging.py"
