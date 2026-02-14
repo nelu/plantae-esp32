@@ -1,6 +1,6 @@
 import time
 
-from lib.datetime import DEFAULT_UNIX_EPOCH_OFFSET
+from lib import datetime
 from lib.file_store import PersistentManager
 
 
@@ -9,6 +9,7 @@ def _default():
         "last_dose_ts": 0,
         "lifetime_volume_l": 0.0,
         "pwm_runtime_s": 0.0,
+        "last_time_sync_ts": 0
     }
 
 
@@ -18,7 +19,12 @@ class StatsManager(PersistentManager):
 
         self._last_volume_l = None
         self._last_pwm_sample_ms = time.ticks_ms()
-        self.epoch_offset = DEFAULT_UNIX_EPOCH_OFFSET
+        self.epoch_offset = datetime.DEFAULT_UNIX_EPOCH_OFFSET
+
+
+    def save(self):
+        self.data["last_time_sync_ts"] = datetime.unix_now()
+        super().save()
 
     def attach_state(self, state):
         # Deprecated: state binding removed; only track last volume for delta calculations when provided

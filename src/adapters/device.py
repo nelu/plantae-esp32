@@ -20,7 +20,7 @@ def set_rtc_local_from_utc(ts_utc, tz_offset_min=0):
         return False
 
 
-async def sync_rtc_via_ntp(host="pool.ntp.org", retries=3, tz_offset_min=0):
+def sync_rtc_via_ntp(host="pool.ntp.org", retries=3, tz_offset_min=0):
     ntptime.host = host
     for attempt in range(int(retries)):
         try:
@@ -34,6 +34,8 @@ async def sync_rtc_via_ntp(host="pool.ntp.org", retries=3, tz_offset_min=0):
                     return True
         except Exception:
             if attempt < int(retries) - 1:
-                import uasyncio as asyncio
-                await asyncio.sleep(2)
+                try:
+                    time.sleep(2)
+                except Exception:
+                    pass
     return False

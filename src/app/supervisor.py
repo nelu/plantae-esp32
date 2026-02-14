@@ -16,7 +16,7 @@ class Supervisor:
         from adapters.wamp_bridge import WampBridge
         from domain.stats import StatsManager
 
-        CFG.load()
+        # CFG.load()
 
         self.stats = StatsManager()
         self.stats.load()
@@ -99,15 +99,15 @@ class Supervisor:
                     await asyncio.sleep(1)
 
             # dont run any task without wifi
-            while not self.wifi or not self.wifi.is_connected():
-                await asyncio.sleep(2)
+            # while not self.wifi or not self.wifi.is_connected():
+            #     await asyncio.sleep(2)
 
             # normal mode continues:
             asyncio.create_task(tasks.task_ntp(self))
-
-            while not self.state.ntp_ok:
-                await asyncio.sleep(2)
-                continue
+            #
+            # while not self.state.ntp_ok:
+            #     await asyncio.sleep(2)
+            #     continue
 
             self.service.init_hardware(CFG.data, activity_update=self.wamp.publish_status)
             asyncio.create_task(tasks.task_flow(self))
@@ -118,9 +118,9 @@ class Supervisor:
 
             asyncio.create_task(tasks.task_wamp(self))
 
-            while not self.state.wamp_ok:
-                await asyncio.sleep(1)
-                gc.collect()
+            # while not self.state.wamp_ok:
+            #     await asyncio.sleep(1)
+            #     gc.collect()
 
 
 

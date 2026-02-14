@@ -21,6 +21,45 @@ class Wifi:
             return 0
 
 
+    def ensure_sync(self, ssid, password, timeout_s=20):
+        if self.sta.isconnected():
+            return True
+        if not ssid:
+            return False
+
+        status = self.sta.status()
+        if status == network.STAT_CONNECTING:
+            for _ in range(int(timeout_s * 2)):
+                if self.sta.isconnected():
+                    return True
+                time.sleep(1)
+            return self.sta.isconnected()
+
+        now = time.ticks_ms()
+        if time.ticks_diff(now, self._last_connect_ms) < 5000:
+            time.sleep(2)
+            return self.sta.isconnected()
+        self._last_connect_ms = now
+
+        try:
+            self.sta.connect(ssid, password)
+        except OSError:
+            try:
+                self.sta.active(False)
+                time.sleep(2)
+                self.sta.active(True)
+            except Exception:
+                pass
+            return False
+
+        for _ in range(int(timeout_s * 2)):
+            if self.sta.isconnected():
+                return True
+            time.sleep(1)
+
+        return self.sta.isconnected()
+
+
     async def ensure(self, ssid, password, timeout_s=20):
         if self.sta.isconnected():
             return True
@@ -63,4 +102,3 @@ class Wifi:
             await asyncio.sleep(1)
 
         return self.sta.isconnected()
-

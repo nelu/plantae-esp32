@@ -27,6 +27,7 @@ class WampBridge:
         url = wamp_cfg.get("url")
         realm = wamp_cfg.get("realm", "home")
         token = wamp_cfg.get("prefix", "public")
+        mem_logging = bool(wamp_cfg.get("mem_logging", True))
 
         self.client = MicropythonWampClient(
             url=url,
@@ -34,10 +35,32 @@ class WampBridge:
             token=token,
             reconnect=4,
             max_payload=4096,
+            mem_logging=mem_logging,
         )
         # session lifecycle hooks (DeviceApp-style)
         self.client.on_session_join = self._on_session_join  # type: ignore[attr-defined]
         self.client.on_session_lost = self._on_session_lost  # type: ignore[attr-defined]
+
+    def _log_mem_state(self, label):
+        if not LOG:
+            return
+        try:
+            free = gc.mem_free()
+            alloc = gc.mem_alloc() if hasattr(gc, "mem_alloc") else None
+            LOG.info(
+                "%s free=%s alloc=%s subs=%d regs=%d pending_subs=%d pending_regs=%d pending_calls=%d runner=%s",
+                label,
+                free,
+                alloc,
+                len(self.client._subs_by_id),
+                len(self.client._regs_by_id),
+                len(self.client._pending_subs),
+                len(self.client._pending_regs),
+                len(self.client._pending_calls),
+                bool(self._runner),
+            )
+        except Exception:
+            pass
 
     def _schedule_announce(self, topic_name="announce.online"):
         loop = asyncio.get_event_loop()
@@ -117,6 +140,7 @@ class WampBridge:
         self.started_event.set()
         self.service.indicator.on()
         self._schedule_announce("announce.online")
+        self._log_mem_state("wamp_bridge: session_join")
 
     def _on_session_lost(self):
         LOG.info("session lost")
@@ -127,6 +151,7 @@ class WampBridge:
             self.service.indicator.blink()
         except Exception:
             pass
+        self._log_mem_state("wamp_bridge: session_lost")
 
     async def close(self):
         # Close the client first so run_forever() exits cleanly
@@ -146,6 +171,8 @@ class WampBridge:
         self.session_ready = False
         self._reset_started()
         self.service.indicator.blink()
+
+        self._log_mem_state("wamp_bridge: close")
 
         await asyncio.sleep_ms(200)
         gc.collect()

@@ -52,6 +52,7 @@ FILES=(
     "adapters/device.py"
     "adapters/http_api.py"
 
+    "app/bootstrap.py"
     "app/supervisor.py"
     "app/provision.py"
     "app/tasks.py"

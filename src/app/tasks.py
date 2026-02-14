@@ -8,6 +8,25 @@ from adapters.config_manager import CFG
 from lib.datetime import local_minutes, local_time_tuple
 
 
+def _log_mem(label):
+    if not LOG:
+        return
+    try:
+        free = gc.mem_free()
+        alloc = gc.mem_alloc() if hasattr(gc, "mem_alloc") else None
+        task_count = None
+        try:
+            if hasattr(asyncio, "all_tasks"):
+                task_count = len(asyncio.all_tasks())
+            elif hasattr(asyncio, "Task") and hasattr(asyncio.Task, "all_tasks"):
+                task_count = len(asyncio.Task.all_tasks())
+        except Exception:
+            task_count = None
+        LOG.info("%s free=%s alloc=%s tasks=%s", label, free, alloc, task_count)
+    except Exception:
+        pass
+
+
 async def task_wifi_status(sup):
     """Update IP/signal without managing reconnects."""
     while True:
@@ -49,14 +68,18 @@ async def task_reboot_watch(sup):
 async def task_ntp(sup):
     from adapters.device import sync_rtc_via_ntp
     ntp_cfg = CFG.data.get("ntp", {})
-    every = int(ntp_cfg.get("sync_every_s", 21600))
+    #every = int(ntp_cfg.get("sync_every_s", 21600))
+    every = 200
+
     host = ntp_cfg.get("host", "pool.ntp.org")
     tz_offset = int(CFG.data.get("tz_offset_min", 0))
     initial_sync = True
 
     while True:
+    #while not sup.state.ntp_ok:
+
         if sup.wifi.is_connected():
-            success = await sync_rtc_via_ntp(host, retries=3, tz_offset_min=tz_offset)
+            success = sync_rtc_via_ntp(host, retries=3, tz_offset_min=tz_offset)
             sup.state.ntp_ok = bool(success)
             if success:
                 LOG.debug("NTP: synced")
@@ -180,11 +203,13 @@ async def task_wamp(sup):
             await asyncio.sleep(3)
 
         try:
-            LOG.info("task_wamp: start run_forever. Signal: %d, Free: %d", sup.state.signal, gc.mem_free())
+            _log_mem("task_wamp: pre-start")
+            LOG.info("task_wamp: start run_forever. Signal: %d", sup.state.signal)
             gc.collect()
             await asyncio.sleep_ms(0)
 
             await sup.wamp.start(timeout_s=20)
+            _log_mem("task_wamp: post-start")
             fail_count = 0
 
             while True:
@@ -199,6 +224,7 @@ async def task_wamp(sup):
             sup.state.wamp_ok = False
             sup.state.last_error = (e,)
             LOG.error("task_wamp: %r", e)
+            _log_mem("task_wamp: failure")
 
             try:
                 await sup.wamp.close()
@@ -207,6 +233,8 @@ async def task_wamp(sup):
             finally:
                 gc.collect()
                 await asyncio.sleep_ms(0)
+
+            _log_mem("task_wamp: post-close")
 
             fail_count += 1
             if fail_count > 10:

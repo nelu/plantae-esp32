@@ -676,6 +676,24 @@ class MicropythonWampClient:
         if self._cleanup_done:
             return
         self._cleanup_done = True
+        if self.mem_logging:
+            try:
+                free = gc.mem_free() if hasattr(gc, "mem_free") else None
+                alloc = gc.mem_alloc() if hasattr(gc, "mem_alloc") else None
+                _log(
+                    "info",
+                    "cleanup: free=%s alloc=%s subs=%d regs=%d pending_subs=%d pending_regs=%d pending_calls=%d recv_task=%s",
+                    free,
+                    alloc,
+                    len(self._subs_by_id),
+                    len(self._regs_by_id),
+                    len(self._pending_subs),
+                    len(self._pending_regs),
+                    len(self._pending_calls),
+                    bool(self._recv_task),
+                )
+            except Exception:
+                pass
         try:
             cb = getattr(self, "on_session_lost", None)
             if cb:
