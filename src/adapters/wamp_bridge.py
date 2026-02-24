@@ -8,6 +8,8 @@ from logging import LOG
 from adapters.config_manager import CFG
 from mp_wamp_client import MicropythonWampClient  # type: ignore
 
+from adapters.device import set_rtc_local_from_utc
+
 
 def make_name(token, base, device_id):
     return "%s.%s.%s" % (token, base, device_id)
@@ -25,14 +27,17 @@ class WampBridge:
 
         wamp_cfg = CFG.data.get("wamp", {})
         url = wamp_cfg.get("url")
-        realm = wamp_cfg.get("realm", "home")
-        token = wamp_cfg.get("prefix", "public")
+        realm = wamp_cfg.get("realm", "none")
+        token = wamp_cfg.get("token", "")
         mem_logging = bool(wamp_cfg.get("mem_logging", True))
+
+        self._topic_prefix = wamp_cfg.get("prefix", "")
 
         self.client = MicropythonWampClient(
             url=url,
             realm=realm,
             token=token,
+            authid="device:"+CFG.device_id,
             reconnect=4,
             max_payload=4096,
             mem_logging=mem_logging,
@@ -66,10 +71,14 @@ class WampBridge:
         loop = asyncio.get_event_loop()
         loop.create_task(self.publish_announce(topic_name))
 
+
     def _name(self, base, no_sufx=False):
         try:
-            return no_sufx and "%s.%s" % (self.client.token, base) or make_name(self.client.token, base,
+            if self._topic_prefix:
+                return no_sufx and "%s.%s" % (self._topic_prefix, base) or make_name(self._topic_prefix, base,
                                                                                 self.service.state.device_id)
+            else:
+                return no_sufx and base or "%s.%s" % (base, self.service.state.device_id)
         except Exception:
             return base
 
@@ -83,6 +92,10 @@ class WampBridge:
         self.service.state.wamp_ok = False
         self.session_ready = False
         self._reset_started()
+
+        # Allow reconnect after a previous close that set the client to closing state
+        self.client._closing = False
+
         try:
             self.service.indicator.blink()
         except Exception:
@@ -112,6 +125,10 @@ class WampBridge:
         t0 = time.ticks_ms()
         while not self.session_ready:
             await asyncio.sleep_ms(50)
+            if self._runner and self._runner.done():
+                raise OSError("WAMP session ready timeout (join failed)")
+            if getattr(self.client, "_closing", False):
+                raise OSError("WAMP session ready timeout (join failed)")
             if time.ticks_diff(time.ticks_ms(), t0) > int(timeout_s * 1000):
                 raise OSError("WAMP session ready timeout (join failed)")
 
@@ -128,14 +145,37 @@ class WampBridge:
         await self.client.register(self._name("status"), self.rpc_status)
         await self.client.register(self._name("restart"), self.rpc_reboot)
         await self.client.register(self._name("reset"), self.rpc_reset)
+
+        if self.client.realm is "none":
+            pass
+            # await self.client.register(self._name("hwpair"), self.rpc_hwpair)
+
+
+
         self._wired = True
 
-    def _on_session_join(self, session_id=None):
-        LOG.info("session joined: %s", session_id)
+    def _on_session_join(self, session_id=None, session_data=None):
+
+        if session_data:
+            auth_info = session_data.get('authextra', {})
+            user_id = auth_info.get('user_id')
+            tz_data = auth_info.get('device_tz')
+            if tz_data:
+                set_rtc_local_from_utc(auth_info.get('utc_time'), tz_data)
+                if tz_data is not CFG.data['tz_offset_min']:
+                    CFG.update({'tz_offset_min': tz_data})
+                    CFG.save()
+            if user_id:
+                self._topic_prefix = user_id
+
+        LOG.info("session joined: %s %s", session_id, session_data)
+
         self.session_ready = True
         self.service.state.wamp_ok = True
         self.service.state.last_error = None
         self.started = True
+
+
 
         self.started_event.set()
         self.service.indicator.on()
@@ -211,6 +251,12 @@ class WampBridge:
         if not self.is_alive():
             return
         await self.client.publish(self._name(topic), kwargs=payload, options=options or {})
+
+    # async def get_device_config(self):
+    #     if not self.is_alive():
+    #         return
+    #
+    #     await self.client.call("plantae.backend.get_config", kwargs={"device_id": CFG.device_id}, on_result=rtc_via_wamp)
 
     async def publish_status(self, **kwargs):
         if not self.is_alive():
@@ -367,6 +413,12 @@ class WampBridge:
 
     async def rpc_reset(self, args, kwargs):
         return self.service.reset_counters()
+
+    async def rpc_hwpair(self, args, kwargs):
+        while True:
+            if self.service.state.hwpairing:
+                await self.rpc_control([], {"patch_cfg": kwargs.get("patch_cfg", {})})
+            await asyncio.sleep_ms(100)
 
     async def rpc_reboot(self, args, kwargs):
         t = 1

@@ -39,3 +39,5 @@ def sync_rtc_via_ntp(host="pool.ntp.org", retries=3, tz_offset_min=0):
                 except Exception:
                     pass
     return False
+
+

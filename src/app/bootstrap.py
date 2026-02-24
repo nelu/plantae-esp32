@@ -81,7 +81,7 @@ def init_boot():
         wifi = ProvisionWifi()
 
         try:
-            wifi.start_ap(CFG.device_id)
+            wifi.start_ap("plantae-"+CFG.device_id)
         except Exception as e:
             LOG.error("boot: start_ap failed: %s", e)
     else:

@@ -11,7 +11,6 @@ pre{background:#f6f6f6;padding:12px;white-space:pre-wrap;word-break:break-word;b
 <form id="f">
   <input id="s" placeholder="SSID" autocomplete="off" required>
   <input id="p" placeholder="WIFI Password" type="password" autocomplete="off" minlength="8" required>
-  <input id="c" placeholder="User Token" autocomplete="off" required>
   <button type="submit">Connect</button>
 </form>
 <pre id="o">Idle.</pre>
@@ -22,18 +21,18 @@ const baseConfig = {
   wifi: {ssid: "", password: ""},
   ntp: {host: "pool.ntp.org", sync_every_s: 21600},
   wamp: {
-    url: "wss://plantae.robits.org/ws",
+    url: "ws://192.168.4.106:18080/ws",
     sni_host: "plantae.robits.org",
-    realm: "home",
-    prefix: "user-token",
+    realm: "none",
+    prefix: "",
+    token: "",
     keepalive: {ping_interval_s: 25, idle_timeout_s: 180}
   },
   flow: {type: "YFS401", pin: 34, calibration: 4000, read_interval_ms: 1000, pullup_external: true},
   inputs: {pwm_test_btn: {pin: 35, active_low: false, test_duty: 0.5}},
   outputs: {pwm: {pin: 2, freq: 100, active_low: false}},
-  tz_offset_min: 120,
   schedule: {pwm: [], dosing: {
-      "days": ["17:00", "17:00", "17:00", "17:00", "17:00", "17:00", "17:00"],
+      "days": ["", "", "", "", "", "", ""],
       "output": "pwm",
       "duty": 0.5,
       "quantity": 0.1
@@ -46,7 +45,6 @@ $("f").onsubmit = async e => {
 
   const payload = JSON.parse(JSON.stringify(baseConfig));
   payload.wifi = {ssid: $("s").value, password: $("p").value};
-  payload.wamp.prefix = ($("c").value || "").trim();
 
   try {
     const r = await fetch("/provisioning", {

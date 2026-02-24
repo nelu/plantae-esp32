@@ -60,6 +60,7 @@ class DeviceState:
         self.last_error = ""
         self.version = VERSION
         self.build = BUILD_DATE
+        self.hwpairing = False
 
         self.stats_mgr = stats_mgr
 

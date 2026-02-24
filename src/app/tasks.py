@@ -72,11 +72,11 @@ async def task_ntp(sup):
     every = 200
 
     host = ntp_cfg.get("host", "pool.ntp.org")
-    tz_offset = int(CFG.data.get("tz_offset_min", 0))
     initial_sync = True
 
     while True:
     #while not sup.state.ntp_ok:
+        tz_offset = int(CFG.data.get("tz_offset_min", 0))
 
         if sup.wifi.is_connected():
             success = sync_rtc_via_ntp(host, retries=3, tz_offset_min=tz_offset)

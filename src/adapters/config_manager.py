@@ -4,7 +4,7 @@ from lib.file_store import merge, load_with_default, atomic_save
 def get_device_id():
     import ubinascii
     import machine
-    return "plantae-" + ubinascii.hexlify(machine.unique_id()).decode()
+    return ubinascii.hexlify(machine.unique_id()).decode()
 
 
 def default_cfg():
@@ -14,7 +14,7 @@ def default_cfg():
         "wamp": {
             "url": "wss://plantae.robits.org/ws",
             "realm": "none",
-            "prefix": "none.",
+            "prefix": "",
             "keepalive": {
                 "ping_interval_s": 25,
                 "idle_timeout_s": 180

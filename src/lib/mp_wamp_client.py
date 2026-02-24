@@ -78,11 +78,12 @@ class WebSocketClosed(Exception):
 
 class MicropythonWampClient:
     def __init__(self, url, realm,
-                 token=None, reconnect=4, max_payload=4096,
+                 token=None, authid=None, reconnect=4, max_payload=4096,
                  opcode_logging=False, mem_logging=False):
         self.url = url
         self.realm = realm
         self.token = token
+        self.authid = authid
         self.reconnect = reconnect
         self.max_payload = max_payload
         self.opcode_logging = bool(opcode_logging)
@@ -128,6 +129,8 @@ class MicropythonWampClient:
         return self._req_id
 
     async def run_forever(self):
+        # Allow a fresh reconnect cycle after a prior close()
+        self._closing = False
         while not self._closing:
             try:
                 await self.connect()
@@ -341,21 +344,21 @@ class MicropythonWampClient:
             }
         }
         if self.token:
-            details["authmethods"] = ["ticket", "anonymous"]
-            details["authid"] = self.token
+            details["authmethods"] = ["ticket", "anonymous"];
+            details["authid"] = self.authid;
         else:
             details["authmethods"] = ["anonymous"]
         msg = [1, self.realm, details]
         await self._send_wamp(msg)
 
-    async def _post_welcome(self):
+    async def _post_welcome(self, session_data=None):
         await self._replay_subscriptions()
         await self._replay_registrations()
 
         try:
             cb = getattr(self, "on_session_join", None)
             if cb:
-                cb(self.session_id)
+                cb(self.session_id, session_data)
         except Exception as exc:
             _log("warning", "on_session_join failed: %s", exc)
 
@@ -412,7 +415,7 @@ class MicropythonWampClient:
                 self.session_id = msg[1]
                 _log("info", "joined session %s", self.session_id)
                 try:
-                    asyncio.create_task(self._post_welcome())
+                    asyncio.create_task(self._post_welcome(msg[2]))
                 except Exception as exc:
                     _log("error", "post_welcome schedule failed: %s", exc)
             elif msg_type == 4:  # CHALLENGE
