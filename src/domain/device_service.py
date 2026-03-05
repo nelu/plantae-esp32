@@ -1,5 +1,5 @@
 from logging import LOG
-
+from version import INDICATOR_LED, INDICATOR_LED_RGB
 
 class DeviceService:
     __slots__ = (
@@ -24,7 +24,7 @@ class DeviceService:
 
         self.pwm_override = False
         self.pwm_override_source = None
-        self.indicator = self._Indicator(5)
+        self.indicator = self._Indicator(INDICATOR_LED, rgb=INDICATOR_LED_RGB)
 
 
     def init_hardware(self, cfg_data, activity_update=None):
@@ -151,15 +151,36 @@ class DeviceService:
 
     # --- Indicator helper (built-in LED/buzzer) ---
     class _Indicator:
-        __slots__ = ("_pin", "_pwm", "active_low", "_PWM")
+        __slots__ = (
+            "_pin", "_pwm", "active_low", "_PWM",
+            "_rgb", "_np", "_anim_task", "_anim_mode", "_blink_freq", "_blink_duty",
+        )
 
-        def __init__(self, pin=5):
+        def __init__(self, pin=5, rgb=False):
             from machine import Pin, PWM
 
             self._PWM = PWM
-            self.active_low = True  # LOLIN32 built-in LED is active low
             self._pin = Pin(int(pin), Pin.OUT)
             self._pwm = None
+            self.active_low = True  # legacy mono indicator default
+
+            self._rgb = bool(rgb)
+            self._np = None
+            self._anim_task = None
+            self._anim_mode = None
+            self._blink_freq = 1.0
+            self._blink_duty = 0.5
+
+            if self._rgb:
+                try:
+                    from neopixel import NeoPixel
+
+                    self._np = NeoPixel(self._pin, 1)
+                    self.active_low = False
+                except Exception as e:
+                    self._rgb = False
+                    LOG.warning("indicator: rgb init failed on pin %s: %s", pin, e)
+
             self.off()
 
         def _clear_pwm(self):
@@ -171,17 +192,157 @@ class DeviceService:
                     pass
                 self._pwm = None
 
+        def _clear_animation(self):
+            task = self._anim_task
+            if task:
+                try:
+                    task.cancel()
+                except Exception:
+                    pass
+            self._anim_task = None
+            self._anim_mode = None
+
+        def _write_rgb(self, r, g, b):
+            if not self._np:
+                return
+            try:
+                self._np[0] = (int(r), int(g), int(b))
+                self._np.write()
+            except Exception:
+                pass
+
+        @staticmethod
+        def _wheel(pos):
+            pos = int(pos) & 0xFF
+            if pos < 85:
+                return 255 - (pos * 3), pos * 3, 0
+            if pos < 170:
+                pos -= 85
+                return 0, 255 - (pos * 3), pos * 3
+            pos -= 170
+            return pos * 3, 0, 255 - (pos * 3)
+
+        @staticmethod
+        async def _sleep_ms(asyncio, delay_ms):
+            if hasattr(asyncio, "sleep_ms"):
+                await asyncio.sleep_ms(delay_ms)
+            else:
+                await asyncio.sleep(delay_ms / 1000)
+
+        async def _run_rgb_animation(self):
+            try:
+                import uasyncio as asyncio
+            except Exception:
+                import asyncio
+
+            step_ms = 30
+            phase_ms = 0
+            hue = 0
+
+            while True:
+                mode = self._anim_mode
+
+                if mode == "pulse":
+                    period_ms = 3000
+                    half = period_ms // 2
+                    t = phase_ms % period_ms
+                    if t < half:
+                        level = (t * 255) // half
+                    else:
+                        level = ((period_ms - t) * 255) // half
+
+                    min_g = 8
+                    max_g = 96
+                    green = min_g + ((max_g - min_g) * level) // 255
+                    self._write_rgb(0, green, 0)
+
+                elif mode == "rainbow_blink":
+                    freq_hz = self._blink_freq if self._blink_freq > 0 else 1.0
+                    period_ms = int(1000.0 / freq_hz)
+                    if period_ms < step_ms:
+                        period_ms = step_ms
+
+                    duty = self._blink_duty
+                    if duty < 0:
+                        duty = 0
+                    if duty > 1:
+                        duty = 1
+
+                    on_ms = int(period_ms * duty)
+                    in_on_window = on_ms > 0 and (phase_ms % period_ms) < on_ms
+
+                    if in_on_window:
+                        r, g, b = self._wheel(hue)
+                        self._write_rgb(r, g, b)
+                    else:
+                        self._write_rgb(0, 0, 0)
+
+                    hue = (hue + 2) & 0xFF
+
+                else:
+                    return
+
+                phase_ms += step_ms
+                await self._sleep_ms(asyncio, step_ms)
+
+        def _start_rgb_animation(self, mode, freq_hz=1, duty=0.5):
+            if not self._rgb:
+                return
+
+            self._clear_pwm()
+            self._clear_animation()
+            self._anim_mode = mode
+
+            try:
+                self._blink_freq = float(freq_hz) if freq_hz is not None else 1.0
+            except Exception:
+                self._blink_freq = 1.0
+            if self._blink_freq <= 0:
+                self._blink_freq = 1.0
+
+            self._blink_duty = 0.0 if duty is None else duty
+            if self._blink_duty < 0:
+                self._blink_duty = 0
+            if self._blink_duty > 1:
+                self._blink_duty = 1
+
+            try:
+                import uasyncio as asyncio
+            except Exception:
+                import asyncio
+
+            try:
+                self._anim_task = asyncio.get_event_loop().create_task(self._run_rgb_animation())
+            except Exception:
+                self._anim_task = None
+                self._anim_mode = None
+
         def on(self):
+            if self._rgb:
+                self._start_rgb_animation("pulse")
+                return
+
+            self._clear_animation()
             self._clear_pwm()
             val = 0 if self.active_low else 1
             self._pin.value(val)
 
         def off(self):
+            self._clear_animation()
             self._clear_pwm()
+            if self._rgb:
+                self._write_rgb(0, 0, 0)
+                return
+
             val = 1 if self.active_low else 0
             self._pin.value(val)
 
         def blink(self, freq_hz=1, duty=0.5):
+            if self._rgb:
+                self._start_rgb_animation("rainbow_blink", freq_hz=freq_hz, duty=duty)
+                return
+
+            self._clear_animation()
             pwm = self._pwm or self._PWM(self._pin)
             freq = int(freq_hz) if freq_hz and freq_hz > 0 else 1
             pwm.freq(freq)
@@ -195,7 +356,12 @@ class DeviceService:
             self._pwm = pwm
 
         def deinit(self):
+            self._clear_animation()
             self._clear_pwm()
+            if self._rgb:
+                self._write_rgb(0, 0, 0)
+                return
+
             try:
                 self._pin.value(1 if self.active_low else 0)
             except Exception:

@@ -15,6 +15,7 @@ def default_cfg():
             "url": "wss://plantae.robits.org/ws",
             "realm": "none",
             "prefix": "",
+            "auth_fail_retries": 3,
             "keepalive": {
                 "ping_interval_s": 25,
                 "idle_timeout_s": 180
@@ -31,6 +32,15 @@ def default_cfg():
 
 
 def _validate(cfg):
+    wamp = cfg.setdefault("wamp", {})
+    try:
+        auth_fail_retries = int(wamp.get("auth_fail_retries", 3))
+    except Exception:
+        auth_fail_retries = 3
+    if auth_fail_retries < 1:
+        auth_fail_retries = 1
+    wamp["auth_fail_retries"] = auth_fail_retries
+
     flow = cfg.setdefault("flow", {})
     flow["pin"] = int(flow.get("pin", 14))
     flow["calibration"] = int(flow.get("calibration", 5880))

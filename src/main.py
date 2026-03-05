@@ -10,6 +10,5 @@ except Exception as e:
     LOG.error("Fatal error in main:")
     sys.print_exception(e)
 
-machine.reset()
 
 

@@ -117,6 +117,9 @@ class MicropythonWampClient:
 
         self._recv_task = None
 
+        self.last_abort_reason = None
+        self.last_abort_details = None
+
         # TX buffers reused to reduce per-frame allocations
         self._tx_mask = bytearray(4)
         # Max header size: 2 (base) + 8 (len) + 4 (mask)
@@ -166,6 +169,8 @@ class MicropythonWampClient:
                 self._closed_ws = False
                 self._sent_goodbye = False
                 self._recv_task = None
+                self.last_abort_reason = None
+                self.last_abort_details = None
                 await self._open_socket()
                 await self._handshake()
                 self.connected = True
@@ -413,6 +418,8 @@ class MicropythonWampClient:
         try:
             if msg_type == 2:  # WELCOME
                 self.session_id = msg[1]
+                self.last_abort_reason = None
+                self.last_abort_details = None
                 _log("info", "joined session %s", self.session_id)
                 try:
                     asyncio.create_task(self._post_welcome(msg[2]))
@@ -454,6 +461,8 @@ class MicropythonWampClient:
             elif msg_type == 3:  # ABORT
                 reason = msg[2] if len(msg) > 2 else ""
                 details = msg[1] if len(msg) > 1 else {}
+                self.last_abort_reason = reason
+                self.last_abort_details = details
                 _log("error", "abort received reason=%s details=%s", reason, details)
                 await self._close_ws()
             elif msg_type == 8:  # ERROR (subscribe/register/call/publish)
@@ -628,9 +637,14 @@ class MicropythonWampClient:
             await self.writer.drain()
 
     async def _read_exact(self, n):
+        if self.reader is None:
+            raise WebSocketClosed("reader missing")
         buf = b""
         while len(buf) < n:
-            chunk = await self.reader.read(n - len(buf))
+            reader = self.reader
+            if reader is None:
+                raise WebSocketClosed("reader missing")
+            chunk = await reader.read(n - len(buf))
             if not chunk:
                 raise WebSocketClosed("socket closed")
             buf += chunk

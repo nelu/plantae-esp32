@@ -112,7 +112,7 @@ class Supervisor:
             self.service.init_hardware(CFG.data, activity_update=self.wamp.publish_status)
             asyncio.create_task(tasks.task_stats(self))
 
-            if CFG.data['wamp']['realm'] is not "none":
+            if CFG.data['wamp']['realm'] != "none":
                 asyncio.create_task(tasks.task_flow(self))
                 asyncio.create_task(tasks.task_pwm_schedule(self))
                 asyncio.create_task(tasks.task_pwm_test_btn(self))

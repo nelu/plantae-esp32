@@ -74,7 +74,7 @@ def init_boot():
     pwd = wifi_cfg.get("password")
     is_provisioning = not ssid
 
-    LOG.info("boot: starting network, provisioning=%s", is_provisioning)
+    LOG.info("boot: starting network, device=%s provisioning=%s", "plantae-"+CFG.device_id, is_provisioning)
 
     if is_provisioning:
         from app.provision import ProvisionWifi

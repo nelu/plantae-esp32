@@ -30,8 +30,17 @@ class WampBridge:
         realm = wamp_cfg.get("realm", "none")
         token = wamp_cfg.get("token", "")
         mem_logging = bool(wamp_cfg.get("mem_logging", True))
+        try:
+            auth_fail_retries = int(wamp_cfg.get("auth_fail_retries", 3))
+        except Exception:
+            auth_fail_retries = 3
+        if auth_fail_retries < 1:
+            auth_fail_retries = 1
 
         self._topic_prefix = wamp_cfg.get("prefix", "")
+        self._auth_fail_retries = auth_fail_retries
+        self._auth_fail_count = 0
+        self._auth_recovery_pending = False
 
         self.client = MicropythonWampClient(
             url=url,
@@ -85,6 +94,12 @@ class WampBridge:
     def _reset_started(self):
         self.started = False
         self.started_event = asyncio.Event()
+
+    @staticmethod
+    def _auth_abort_message(details):
+        if isinstance(details, dict):
+            return details.get("message", "")
+        return details and str(details) or ""
 
     async def start(self, timeout_s=15):
         # Basic gc before connection
@@ -146,7 +161,7 @@ class WampBridge:
         await self.client.register(self._name("restart"), self.rpc_reboot)
         await self.client.register(self._name("reset"), self.rpc_reset)
 
-        if self.client.realm is "none":
+        if self.client.realm == "none":
             pass
             # await self.client.register(self._name("hwpair"), self.rpc_hwpair)
 
@@ -162,7 +177,7 @@ class WampBridge:
             tz_data = auth_info.get('device_tz')
             if tz_data:
                 set_rtc_local_from_utc(auth_info.get('utc_time'), tz_data)
-                if tz_data is not CFG.data['tz_offset_min']:
+                if tz_data != CFG.data['tz_offset_min']:
                     CFG.update({'tz_offset_min': tz_data})
                     CFG.save()
             if user_id:
@@ -170,6 +185,8 @@ class WampBridge:
 
         LOG.info("session joined: %s %s", session_id, session_data)
 
+        self._auth_fail_count = 0
+        self._auth_recovery_pending = False
         self.session_ready = True
         self.service.state.wamp_ok = True
         self.service.state.last_error = None
@@ -183,6 +200,39 @@ class WampBridge:
         self._log_mem_state("wamp_bridge: session_join")
 
     def _on_session_lost(self):
+        reason = getattr(self.client, "last_abort_reason", None)
+        details = getattr(self.client, "last_abort_details", None)
+
+        if reason == "wamp.error.authentication_failed":
+            self._auth_fail_count += 1
+            auth_msg = self._auth_abort_message(details)
+            self.service.state.last_error = auth_msg or "wamp authentication failed"
+            if auth_msg:
+                LOG.error("wamp auth failed (%d/%d): %s", self._auth_fail_count, self._auth_fail_retries, auth_msg)
+            else:
+                LOG.error("wamp auth failed (%d/%d)", self._auth_fail_count, self._auth_fail_retries)
+
+            if not self._auth_recovery_pending and self._auth_fail_count >= self._auth_fail_retries:
+                self._auth_recovery_pending = True
+                LOG.error("wamp auth retries exhausted; resetting wamp config and rebooting")
+                try:
+                    CFG.update({"wamp": {"realm": "none", "prefix": "", "token": ""}})
+                    CFG.save()
+                    self.client.realm = "none"
+                    self.client.token = ""
+                    self._topic_prefix = ""
+                except Exception as exc:
+                    LOG.error("wamp auth recovery save failed: %s", exc)
+                try:
+                    self.service.reboot(2)
+                except Exception as exc:
+                    LOG.error("wamp auth recovery reboot failed: %s", exc)
+        else:
+            if self._auth_fail_count:
+                LOG.info("wamp auth fail counter reset")
+            self._auth_fail_count = 0
+            self._auth_recovery_pending = False
+
         LOG.info("session lost")
         self.session_ready = False
         self.service.state.wamp_ok = False
