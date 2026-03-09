@@ -30,6 +30,7 @@ Publishes:
 - status.<device_id> (+ optional status.<ip>)
 RPC:
 - control
+  - `{"update": "<release-tag>"}` triggers OTA update from GitHub release json
 - calibrate (+ calibrate.<device_id> and optionally calibrate.<ip>)
 - reset.<device_id> (+ optional reset.<ip>)
 - reboot (+ reboot.<device_id> and optionally reboot.<ip>)

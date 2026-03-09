@@ -29,7 +29,16 @@ Base procedures exist both unsuffixed and per-device (`<name>.<device_id>`) unle
 ```json
 {"patch_cfg": {"flow": {"calibration": 1200}}}
 ```
-- Response: `true` on success, otherwise `false`.
+- Request (firmware update):
+```json
+{"update": "v0.0.3"}
+```
+- Response: `true`/`false` for switch/config actions. Firmware update returns a result object.
+
+Firmware update response example:
+```json
+{"ok": true, "status": "updating", "version": "v0.0.3"}
+```
 
 ### `calibrate`
 - Purpose: flow calibration update.

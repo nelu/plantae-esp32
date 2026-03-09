@@ -278,6 +278,7 @@ class WampBridge:
             "build": self.service.state.build,
             "ts": time.time(),
             "config": CFG.data,
+            "alerts": self.service.state.alerts.data
         }
 
         options = {}
@@ -296,6 +297,11 @@ class WampBridge:
         if not self.is_alive():
             return
         await self.client.publish(self._name("switch"), args=[int(idx), int(bool(on))])
+
+    async def publish_alerts(self):
+        if not self.is_alive():
+            return
+        await self.publish_topic("alerts", {"alerts": self.service.state.alerts.data})
 
     async def publish_topic(self, topic, payload, options=None):
         if not self.is_alive():
@@ -337,6 +343,10 @@ class WampBridge:
             return ok
         if "patch_cfg" in kwargs and isinstance(kwargs["patch_cfg"], dict):
             return self.service.patch_config(kwargs["patch_cfg"])
+
+        if "update" in kwargs and isinstance(kwargs["update"], str):
+            return self.service.update_firmware(kwargs["update"].strip())
+
         return False
 
     async def rpc_calibrate(self, args, kwargs):

@@ -54,12 +54,30 @@ class Supervisor:
 
         gc.collect()
 
+    @staticmethod
+    def confirm_firmware_boot():
+        if not getattr(CFG, "ota_capable", False):
+            return
+        try:
+            import ota.rollback
+
+            ota.rollback.cancel()
+            LOG.info("OTA: firmware boot confirmed")
+        except Exception as e:
+            LOG.error("OTA: firmware confirm failed: %s", e)
+
     async def _announce_reboot(self):
         if self.wamp:
             try:
                 await self.wamp.publish_announce("announce.offline")
+                await self.wamp.close()
             except Exception as e:
                 LOG.error("Failed to announce offline: %s", e)
+
+
+
+    def has_reboot_scheduled(self):
+        return self._reboot_at
 
     def schedule_reboot(self, t_s=1):
         if t_s < 1: t_s = 1
@@ -93,6 +111,7 @@ class Supervisor:
 
                 asyncio.create_task(dns_hijack_server(ap_ip=self.wifi.ap_ip()))
                 asyncio.create_task(tasks.task_http(self))
+                # self.confirm_firmware_boot()
 
                 # just idle; provisioning endpoint will save config + reboot
                 while True:
@@ -109,7 +128,7 @@ class Supervisor:
             #     await asyncio.sleep(2)
             #     continue
 
-            self.service.init_hardware(CFG.data, activity_update=self.wamp.publish_status)
+            self.service.init_hardware(CFG.data, wamp_bridge=self.wamp)
             asyncio.create_task(tasks.task_stats(self))
 
             if CFG.data['wamp']['realm'] != "none":
@@ -135,6 +154,7 @@ class Supervisor:
 
 
             LOG.info("supervisor: tasks started")
+            self.confirm_firmware_boot()
 
             loop_count = 0
             while True:

@@ -1,12 +1,14 @@
 from logging import LOG
 from version import INDICATOR_LED, INDICATOR_LED_RGB
+import uasyncio as asyncio
+
 
 class DeviceService:
     __slots__ = (
         "state","_schedule_reboot",
         "flow","dosing","switches","pwm",
         "pwm_override","pwm_override_source","stats",
-        "indicator",
+        "indicator", "publish_alerts", "_ota_update_in_progress",
     )
     def __init__(self, state, schedule_reboot, 
                  pwm_controller=None, flow_sensor=None, 
@@ -19,15 +21,18 @@ class DeviceService:
         self.switches = switchbank
         self.pwm = None
 
+        self.publish_alerts = None
+
         self.stats = stats_mgr
 
 
         self.pwm_override = False
         self.pwm_override_source = None
         self.indicator = self._Indicator(INDICATOR_LED, rgb=INDICATOR_LED_RGB)
+        self._ota_update_in_progress = False
 
 
-    def init_hardware(self, cfg_data, activity_update=None):
+    def init_hardware(self, cfg_data,  wamp_bridge,):
         """Initialize PWM, flow sensor, and dosing controller."""
         from drivers.pwm_out import PwmOut
         from drivers.flowsensor import FlowSensor, flowtypes
@@ -41,15 +46,16 @@ class DeviceService:
 
         self.flow = FlowSensor(ppl, fcfg.get("pin", 34))
         self.flow.begin(pullup=bool(fcfg.get("pullup_external", True)))
+        self.publish_alerts = wamp_bridge.publish_alerts
 
         self.dosing = DosingController(
             self.flow,
             self.pwm,
             state=self.state,
             stats=self.stats,
-            activity_update=activity_update,
+            activity_update=wamp_bridge.publish_status,
+            alert_set=self.set_alert
         )
-
         return True
 
 
@@ -69,6 +75,46 @@ class DeviceService:
     def reboot(self, timeout_s=1):
         self._schedule_reboot(timeout_s)
         return True
+
+    def update_firmware(self, version):
+        from adapters.config_manager import CFG
+
+        # if not isinstance(version, str):
+        #     return {"ok": False, "error": "invalid_version"}
+
+        tag = version.strip()
+        if not tag:
+            return {"ok": False, "error": "invalid_version"}
+
+        if not getattr(CFG, "ota_capable", False):
+            LOG.warning("OTA update rejected: device is not OTA-capable")
+            return {"ok": False, "error": "ota_not_supported"}
+
+        if self._ota_update_in_progress:
+            return {"ok": False, "error": "update_in_progress"}
+
+        self._ota_update_in_progress = True
+        json_url = "%s" % tag
+
+        try:
+            import gc
+            import ota.update
+
+            gc.collect()
+            LOG.info("OTA update: tag=%s url=%s", tag, json_url)
+            ota.update.from_json(json_url, verify=True, verbose=True, reboot=False)
+            LOG.warning("OTA update ready, scheduling reboot")
+            self.reboot(2)
+            return {"ok": True, "status": "updating", "version": tag}
+        except Exception as e:
+            LOG.error("OTA update failed: %s", e)
+            try:
+                self.set_alert("firmware", "update failed")
+            except Exception:
+                pass
+            return {"ok": False, "error": "update_failed", "reason": str(e)}
+        finally:
+            self._ota_update_in_progress = False
 
     def shutdown_outputs(self):
         """Safely release active outputs before reboot/reset."""
@@ -129,10 +175,15 @@ class DeviceService:
         return True
 
     def clear_alert(self, kind):
-        return self.state.alerts.clear_alert(kind, persist=True)
-         
-    def set_alert(self, kind, message):
-        return self.state.alerts.set_alert(kind, message, persist=True)
+        saved = self.state.alerts.clear_alert(kind, persist=True)
+        asyncio.create_task(self.publish_alerts())
+        return saved
+
+    def set_alert(self, kind, message, ts=None):
+        saved = self.state.alerts.set_alert(kind, message, ts=ts, persist=True)
+        asyncio.create_task(self.publish_alerts())
+
+        return saved
 
     def set_switch(self, idx, on):
         if self.switches:

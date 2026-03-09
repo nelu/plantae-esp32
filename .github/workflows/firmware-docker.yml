@@ -1,0 +1,104 @@
+name: Firmware Docker Build
+
+on:
+  release:
+    types:
+      - published
+    tags: [ 'v*.*.*' ]
+  workflow_dispatch:
+
+env:
+  REGISTRY: ghcr.io
+  IMAGE_NAME: ${{ github.repository }}/fw-sdk
+
+jobs:
+  fw_sdk:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+    outputs:
+      image: ${{ steps.image.outputs.image }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+      - name: Read MPY_VERSION
+        id: mpy
+        run: |
+          mpy_version=$(grep -E '^ARG MPY_VERSION=' Dockerfile | head -n 1 | cut -d= -f2)
+          if [ -z "$mpy_version" ]; then
+            echo "Missing MPY_VERSION in Dockerfile" >&2
+            exit 1
+          fi
+          echo "version=$mpy_version" >> "$GITHUB_OUTPUT"
+      - name: Set up Buildx
+        uses: docker/setup-buildx-action@v3
+      - name: Log in to GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - name: Set image ref
+        id: image
+        run: echo "image=${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:mpy-${{ steps.mpy.outputs.version }}" >> $env:GITHUB_OUTPUT
+      - name: Check if fw_sdk image exists
+        id: image_check
+        run: |
+          if docker manifest inspect "${{ steps.image.outputs.image }}" >/dev/null 2>&1; then
+            echo "exists=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "exists=false" >> "$GITHUB_OUTPUT"
+          fi
+      - name: Build and push fw_sdk
+        if: steps.image_check.outputs.exists != 'true'
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: Dockerfile
+          target: fw_sdk
+          push: true
+          tags: ${{ steps.image.outputs.image }}
+
+  fw_build:
+    runs-on: ubuntu-latest
+    needs: fw_sdk
+    permissions:
+      contents: write
+      packages: read
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+      - name: Set up Buildx
+        uses: docker/setup-buildx-action@v3
+      - name: Log in to GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - name: Build firmware stage
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: Dockerfile
+          target: fw_build
+          pull: true
+          push: false
+          load: true
+          tags: fw_build:${{ github.run_id }}
+          build-args: |
+            BASE_IMAGE=${{ needs.fw_sdk.outputs.image }}
+      - name: Extract firmware binaries
+        run: |
+          docker create --name fw_extract fw_build:${{ github.run_id }}
+          docker cp fw_extract:/micropython/ports/esp32/build-ESP32_GENERIC_S3-OTA/micropython.bin ./micropython-esp32-generic-s3-ota.bin
+          docker cp fw_extract:/micropython/ports/esp32/build-ESP32_GENERIC-OTA/micropython.bin ./micropython-esp32-generic-ota.bin
+          docker rm -f fw_extract
+      - name: Upload release assets
+        if: github.event_name == 'release'
+        uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            micropython-esp32-generic-s3-ota.bin
+            micropython-esp32-generic-ota.bin

@@ -2,3 +2,11 @@
 /legacy
 /firmware
 /libs/
+/.idea/inspectionProfiles/profiles_settings.xml
+/.idea/libraries/MicroPythonToolsStubs.xml
+/.idea/.gitignore
+/.idea/micropython-tools-settings.xml
+/.idea/misc.xml
+/.idea/modules.xml
+/.idea/plantae_micropython_refactor_keepalive_wss.iml
+/.idea/vcs.xml

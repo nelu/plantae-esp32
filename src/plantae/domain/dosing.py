@@ -11,7 +11,7 @@ from logging import LOG
 from adapters.config_manager import CFG
 
 class DosingController:
-    def __init__(self, flow_sensor, output_controller, state=None, stats=None, alerts_mgr=None, activity_update=None):
+    def __init__(self, flow_sensor, output_controller, state=None, stats=None, alert_set=None, activity_update=None):
         self.flow_sensor = flow_sensor
         self.output_controller = output_controller
         self.state = state
@@ -23,6 +23,7 @@ class DosingController:
         self.timeout_s = 60  # 1 minute timeout for safety
         self.last_auto_dose_day = -1  # Track daily auto-dosing (local day)
         self.activity_update = activity_update
+        self.alert_set = alert_set
         if self.stats:
             try:
                 ts = int(self.stats.data.get("last_dose_ts", 0) or 0)
@@ -130,7 +131,7 @@ class DosingController:
         duration = time.time() - self.dose_start_time
         if duration > self.timeout_s:
             LOG.error("Dosing timeout after %.1f seconds", duration)
-            self.state.alerts.set_alert("dosing", "timeout", ts=self.dose_start_time, persist=True)
+            self.alert_set("dosing", "timeout", ts=self.dose_start_time)
             self.stop_dose()
             return
             

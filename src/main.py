@@ -1,4 +1,4 @@
-from app.supervisor import Supervisor
+from plantae.app.supervisor import Supervisor
 import machine, sys
 import uasyncio as asyncio
 from logging import LOG

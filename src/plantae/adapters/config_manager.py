@@ -7,6 +7,15 @@ def get_device_id():
     return ubinascii.hexlify(machine.unique_id()).decode()
 
 
+def detect_ota_capable():
+    try:
+        import ota.status as ota_status
+
+        return bool(ota_status.ready())
+    except Exception:
+        return False
+
+
 def default_cfg():
     return {
         "tz_offset_min": 120,
@@ -63,6 +72,7 @@ class ConfigManager:
         self.path = path
         self.data = None
         self.device_id = get_device_id()
+        self.ota_capable = detect_ota_capable()
 
     def load(self):
         self.data = _validate(load_with_default(self.path, default_cfg))

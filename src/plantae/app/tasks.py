@@ -189,7 +189,7 @@ async def task_wamp(sup):
     ntp_quiet_done = False
     fail_count = 0
 
-    while True:
+    while not sup.has_reboot_scheduled():
         if not sup.wifi.is_connected():
             await asyncio.sleep(2)
             continue
@@ -263,7 +263,7 @@ async def task_wamp(sup):
 async def task_dosing(sup):
     """Update dosing controller regularly"""
     LOG.debug("task_dosing: started")
-    while True:
+    while not sup.has_reboot_scheduled():
         if sup.service.dosing:
             mins = local_minutes()
             await sup.service.dosing.update(mins)
