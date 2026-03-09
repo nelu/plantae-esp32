@@ -77,7 +77,7 @@ def init_boot():
     LOG.info("boot: starting network, device=%s provisioning=%s", "plantae-"+CFG.device_id, is_provisioning)
 
     if is_provisioning:
-        from app.provision import ProvisionWifi
+        from .provision import ProvisionWifi
         wifi = ProvisionWifi()
 
         try:
@@ -85,7 +85,7 @@ def init_boot():
         except Exception as e:
             LOG.error("boot: start_ap failed: %s", e)
     else:
-        from adapters.wifi import Wifi
+        from ..adapters.wifi import Wifi
         wifi = Wifi()
         stats = StatsManager()
         stats.load()

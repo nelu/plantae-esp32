@@ -66,7 +66,7 @@ async def task_reboot_watch(sup):
 
 
 async def task_ntp(sup):
-    from adapters.device import sync_rtc_via_ntp
+    from ..adapters.device import sync_rtc_via_ntp
     ntp_cfg = CFG.data.get("ntp", {})
     #every = int(ntp_cfg.get("sync_every_s", 21600))
     every = 200
@@ -115,7 +115,7 @@ async def task_flow(sup):
 
 
 async def task_pwm_schedule(sup):
-    from domain.scheduler import duty_from_schedule
+    from ..domain.scheduler import duty_from_schedule
 
     while True:
         if not sup.service.pwm_override and not (sup.service.dosing and sup.service.dosing.is_dosing):
@@ -168,13 +168,13 @@ async def task_pwm_test_btn(sup):
 async def task_http(sup):
     if sup.http_server is None:
         if sup.is_provisioning:
-            from app.provision import ProvisionHttp
+            from .provision import ProvisionHttp
             sup.http_api = ProvisionHttp(
                 sup.service,
                 sup.wifi
             )
         else:
-            from adapters.http_api import HttpApi
+            from ..adapters.http_api import HttpApi
             sup.http_api = HttpApi(sup.service)
 
         sup.http_server = await sup.http_api.serve(port=80)
