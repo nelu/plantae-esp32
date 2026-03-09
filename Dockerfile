@@ -1,7 +1,7 @@
 # Use a smaller base image
 ARG IDF_TAG=v5.5.1
 ARG BASE_IMAGE=fw_sdk
-ARG app_version
+ARG app_version=latest
 FROM espressif/idf:${IDF_TAG} AS fw_sdk
 
 ARG app_version
