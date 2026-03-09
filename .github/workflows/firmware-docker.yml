@@ -93,7 +93,7 @@ jobs:
         run: |
           docker create --name fw_extract fw_build:${{ github.run_id }}
           docker cp fw_extract:/micropython/ports/esp32/build-ESP32_GENERIC_S3-OTA/micropython.bin ./micropython-esp32-generic-s3-ota.bin
-          docker cp fw_extract:/micropython/ports/esp32/build-ESP32_GENERIC-OTA/micropython.bin ./micropython-esp32-generic-ota.bin
+          docker cp fw_extract:/micropython/ports/esp32/build-ESP32_GENERIC-OTANOBLE/micropython.bin ./micropython-esp32-generic-ota.bin
           docker rm -f fw_extract
       - name: Upload release assets
         if: github.event_name == 'release'
