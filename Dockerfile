@@ -14,7 +14,7 @@ RUN git clone --depth 1 --recurse-submodules --branch "v${MPY_VERSION}" \
 
 
 RUN cd $MPY_PATH && make -C mpy-cross
-RUN cd /opt/esp/idf && . /opt/esp/idf/export.sh && cd $MPY_PATH/ports/esp32 && make BOARD=ESP32_GENERIC BOARD_VARIANT=OTA
+#RUN cd /opt/esp/idf && . /opt/esp/idf/export.sh && cd $MPY_PATH/ports/esp32 && make BOARD=ESP32_GENERIC BOARD_VARIANT=OTA
 
 # Set permissions for shared folders
 RUN chmod 777 /opt $MPY_PATH
@@ -29,8 +29,7 @@ COPY ./src ${MPY_PATH}/ports/esp32/modules
 COPY ./fw_config/ports/esp32 ${MPY_PATH}/ports/esp32
 
 RUN cd /opt/esp/idf && . /opt/esp/idf/export.sh && cd ${MPY_PATH}/ports/esp32/  \
-    && make clean \
-    && make submodules \
+#    && make submodules \
     && make BOARD=ESP32_GENERIC BOARD_VARIANT=OTA && \
     make BOARD=ESP32_GENERIC_S3 BOARD_VARIANT=OTA
 
