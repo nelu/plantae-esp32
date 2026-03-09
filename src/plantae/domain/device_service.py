@@ -82,8 +82,8 @@ class DeviceService:
         # if not isinstance(version, str):
         #     return {"ok": False, "error": "invalid_version"}
 
-        tag = version.strip()
-        if not tag:
+        fw_url = version.strip()
+        if not fw_url:
             return {"ok": False, "error": "invalid_version"}
 
         if not getattr(CFG, "ota_capable", False):
@@ -94,18 +94,17 @@ class DeviceService:
             return {"ok": False, "error": "update_in_progress"}
 
         self._ota_update_in_progress = True
-        json_url = "%s" % tag
 
         try:
             import gc
             import ota.update
 
             gc.collect()
-            LOG.info("OTA update: firmware=%s", tag, json_url)
-            ota.update.from_file(json_url, verify=False, verbose=True, reboot=False)
+            LOG.info("OTA update: firmware=%s", fw_url)
+            ota.update.from_file(fw_url, verify=False, verbose=True, reboot=False)
             LOG.warning("OTA update ready, scheduling reboot")
             self.reboot(2)
-            return {"ok": True, "status": "updating", "version": tag}
+            return {"ok": True, "status": "updating", "version": fw_url}
         except Exception as e:
             LOG.error("OTA update failed: %s", e)
             try:
