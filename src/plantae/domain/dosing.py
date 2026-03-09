@@ -1,6 +1,6 @@
 import uasyncio as asyncio
 
-from lib.datetime import current_local_day, local_wday, parse_hhmm, ts_to_local_day
+from datetime import current_local_day, local_wday, parse_hhmm, ts_to_local_day
 import time
 
 from logging import LOG
@@ -8,7 +8,7 @@ from logging import LOG
 # from logging import Logger, DEBUG
 # LOG = Logger('dosing', DEBUG)
 
-from adapters.config_manager import CFG
+from ..adapters.config_manager import CFG
 
 class DosingController:
     def __init__(self, flow_sensor, output_controller, state=None, stats=None, alert_set=None, activity_update=None):

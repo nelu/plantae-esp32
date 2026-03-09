@@ -1,9 +1,9 @@
 import time
 from logging import LOG
 
-from adapters.config_manager import CFG, default_cfg
-from adapters.device import sync_rtc_via_ntp, set_rtc_local_from_utc
-from domain.stats import StatsManager
+from ..adapters.config_manager import CFG, default_cfg
+from ..adapters.device import sync_rtc_via_ntp, set_rtc_local_from_utc
+from ..domain.stats import StatsManager
 
 
 def _maybe_factory_reset_button(hold_time_s=5, wait_window_s=5):

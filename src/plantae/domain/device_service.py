@@ -34,9 +34,9 @@ class DeviceService:
 
     def init_hardware(self, cfg_data,  wamp_bridge,):
         """Initialize PWM, flow sensor, and dosing controller."""
-        from drivers.pwm_out import PwmOut
-        from drivers.flowsensor import FlowSensor, flowtypes
-        from domain.dosing import DosingController
+        from ..drivers.pwm_out import PwmOut
+        from ..drivers.flowsensor import FlowSensor, flowtypes
+        from .dosing import DosingController
 
         pwm_cfg = cfg_data["outputs"]["pwm"]
         fcfg = cfg_data["flow"]
@@ -63,11 +63,11 @@ class DeviceService:
         return self.state.snapshot()
 
     def get_config(self):
-        from adapters.config_manager import CFG
+        from ..adapters.config_manager import CFG
         return CFG.data
 
     def patch_config(self, patch):
-        from adapters.config_manager import CFG
+        from ..adapters.config_manager import CFG
         CFG.update(patch)
         CFG.save()
         return True
@@ -77,7 +77,7 @@ class DeviceService:
         return True
 
     def update_firmware(self, version):
-        from adapters.config_manager import CFG
+        from ..adapters.config_manager import CFG
 
         # if not isinstance(version, str):
         #     return {"ok": False, "error": "invalid_version"}

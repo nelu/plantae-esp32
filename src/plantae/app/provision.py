@@ -1,6 +1,6 @@
 import time
 import network
-from adapters.wifi import Wifi
+from ..adapters.wifi import Wifi
 from logging import LOG
 import uasyncio as asyncio
 import ujson as json
@@ -8,7 +8,7 @@ import gc
 import os
 import socket
 
-from adapters.http_api import HttpApi
+from ..adapters.http_api import HttpApi
 
 AP_DEVICE_IP="192.168.110.1"
 

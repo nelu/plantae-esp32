@@ -2,7 +2,7 @@ import time
 import ntptime
 
 from machine import RTC
-from lib.datetime import DEFAULT_UNIX_EPOCH_OFFSET
+from datetime import DEFAULT_UNIX_EPOCH_OFFSET
 
 # NOTE: Tested with docker image micropython/unix:v1.27.0
 

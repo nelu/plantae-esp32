@@ -1,7 +1,7 @@
 import time
 
-from lib import datetime
-from lib.file_store import PersistentManager
+import datetime
+from file_store import PersistentManager
 
 
 def _default():

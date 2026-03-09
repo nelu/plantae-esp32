@@ -2,8 +2,8 @@ import time
 import gc
 
 import uasyncio as asyncio
-from adapters.config_manager import CFG
-from app import tasks
+from ..adapters.config_manager import CFG
+import tasks
 
 from logging import LOG
 # from logging import Logger, DEBUG
@@ -11,10 +11,10 @@ from logging import LOG
 
 class Supervisor:
     def __init__(self):
-        from domain.state import DeviceState
-        from domain.device_service import DeviceService
-        from adapters.wamp_bridge import WampBridge
-        from domain.stats import StatsManager
+        from ..domain.state import DeviceState
+        from ..domain.device_service import DeviceService
+        from ..adapters.wamp_bridge import WampBridge
+        from ..domain.stats import StatsManager
 
         # CFG.load()
 
@@ -35,10 +35,10 @@ class Supervisor:
         if self.is_provisioning:
             self.service.indicator.blink(freq_hz=3)
 
-            from app.provision import ProvisionWifi
+            from .provision import ProvisionWifi
             self.wifi = ProvisionWifi()
         else:
-            from adapters.wifi import Wifi
+            from ..adapters.wifi import Wifi
             self.wifi = Wifi()
 
         self.switchbank = None
@@ -106,7 +106,7 @@ class Supervisor:
             asyncio.create_task(tasks.task_wifi_status(self))
 
             if self.is_provisioning:
-                from app.provision import dns_hijack_server
+                from .provision import dns_hijack_server
                 LOG.info("run: Provisioning mode")
 
                 asyncio.create_task(dns_hijack_server(ap_ip=self.wifi.ap_ip()))

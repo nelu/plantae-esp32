@@ -1,7 +1,7 @@
 import time, gc
 
-from lib.file_store import PersistentManager
-from lib.datetime import DEFAULT_UNIX_EPOCH_OFFSET
+from file_store import PersistentManager
+from datetime import DEFAULT_UNIX_EPOCH_OFFSET
 
 
 class AlertManager(PersistentManager):

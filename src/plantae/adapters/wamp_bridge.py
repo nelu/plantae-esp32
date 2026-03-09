@@ -5,10 +5,10 @@ import uasyncio as asyncio
 
 from logging import LOG
 
-from adapters.config_manager import CFG
+from ..adapters.config_manager import CFG
 from mp_wamp_client import MicropythonWampClient  # type: ignore
 
-from adapters.device import set_rtc_local_from_utc
+from ..adapters.device import set_rtc_local_from_utc
 
 
 def make_name(token, base, device_id):

@@ -4,8 +4,8 @@ import gc
 import uasyncio as asyncio
 from logging import LOG
 
-from adapters.config_manager import CFG
-from lib.datetime import local_minutes, local_time_tuple
+from ..adapters.config_manager import CFG
+from datetime import local_minutes, local_time_tuple
 
 
 def _log_mem(label):

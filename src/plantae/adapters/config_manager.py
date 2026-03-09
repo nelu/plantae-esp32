@@ -1,4 +1,4 @@
-from lib.file_store import merge, load_with_default, atomic_save
+from file_store import merge, load_with_default, atomic_save
 
 
 def get_device_id():
