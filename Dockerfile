@@ -50,7 +50,7 @@ COPY ./fw_config/ports/esp32 ${MPY_PATH}/ports/esp32
 
 COPY version.sh /tmp/version.sh
 
-RUN chmod 775 /tmp/version.sh && /tmp/version.sh "${MPY_PATH}/ports/esp32/plantae/version.py"
+RUN chmod 775 /tmp/version.sh && /tmp/version.sh "${MPY_PATH}/ports/esp32/modules/plantae/version.py"
 
 RUN cd /opt/esp/idf && . /opt/esp/idf/export.sh && cd ${MPY_PATH}/ports/esp32/  \
 #    && make submodules \
