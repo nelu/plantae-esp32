@@ -41,7 +41,7 @@ jobs:
           password: ${{ secrets.GITHUB_TOKEN }}
       - name: Set image ref
         id: image
-        run: echo "image=${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:mpy-${{ steps.mpy.outputs.version }}" >> $env:GITHUB_OUTPUT
+        run: echo "image=${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:mpy-${{ steps.mpy.outputs.version }}" >> "$GITHUB_OUTPUT"
       - name: Check if fw_sdk image exists
         id: image_check
         run: |
