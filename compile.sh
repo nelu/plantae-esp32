@@ -5,23 +5,7 @@ MPY_CROSS="mpy-cross"
 SRC_DIR="src"
 DIST_DIR="dist"
 
-TODAY=$(date '+%Y-%m-%d')
-VERSION_FILE="${SRC_DIR}/version.py"
-
-if [ -f "$VERSION_FILE" ]; then
-    tmp_file=$(mktemp)
-    if sed -E "s/^BUILD_DATE\s*=\s*\".*\"/BUILD_DATE = \"${TODAY}\"/" "$VERSION_FILE" >"$tmp_file"; then
-        mv "$tmp_file" "$VERSION_FILE"
-        echo "$(date '+%Y-%m-%d %H:%M:%S') Updated BUILD_DATE in $VERSION_FILE to ${TODAY}"
-    else
-        rm -f "$tmp_file"
-        echo "$(date '+%Y-%m-%d %H:%M:%S') Failed updating BUILD_DATE in $VERSION_FILE" >&2
-        exit 1
-    fi
-else
-    echo "$(date '+%Y-%m-%d %H:%M:%S') Missing $VERSION_FILE" >&2
-    exit 1
-fi
+./version.sh src/version.py
 
 echo "$(date '+%Y-%m-%d %H:%M:%S') Building Production Image in $DIST_DIR..."
 
@@ -103,7 +87,8 @@ for rel_file in "${FILES[@]}"; do
         
         echo "$(date '+%Y-%m-%d %H:%M:%S') Compiling $rel_file -> $out_path"
         $MPY_CROSS -O3 -s "$rel_file" -o "$out_path" -- "$src_path"
-        
+        #$MPY_CROSS -o "$out_path" -- "$src_path"
+
         if [ $? -ne 0 ]; then
             echo "$(date '+%Y-%m-%d %H:%M:%S')  [FAIL]"
             exit 1

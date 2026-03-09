@@ -1,7 +1,11 @@
 # Use a smaller base image
 ARG IDF_TAG=v5.5.1
 ARG BASE_IMAGE=fw_sdk
+ARG app_version
 FROM espressif/idf:${IDF_TAG} AS fw_sdk
+
+ARG app_version
+ENV APP_VERSION=${app_version}
 
 ARG MPY_VERSION=1.27.0
 
@@ -36,10 +40,17 @@ CMD [ "/bin/bash" ]
 
 FROM ${BASE_IMAGE} AS fw_build
 
+ARG app_version
+ENV APP_VERSION=${app_version}
+
 WORKDIR ${MPY_PATH}
 
 COPY ./src ${MPY_PATH}/ports/esp32/modules
 COPY ./fw_config/ports/esp32 ${MPY_PATH}/ports/esp32
+
+COPY version.sh /tmp/version.sh
+
+RUN chmod 775 /tmp/version.sh && /tmp/version.sh "${MPY_PATH}/ports/esp32/plantae/version.py"
 
 RUN cd /opt/esp/idf && . /opt/esp/idf/export.sh && cd ${MPY_PATH}/ports/esp32/  \
 #    && make submodules \

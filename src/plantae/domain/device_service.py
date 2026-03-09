@@ -101,8 +101,8 @@ class DeviceService:
             import ota.update
 
             gc.collect()
-            LOG.info("OTA update: tag=%s url=%s", tag, json_url)
-            ota.update.from_json(json_url, verify=True, verbose=True, reboot=False)
+            LOG.info("OTA update: firmware=%s", tag, json_url)
+            ota.update.from_file(json_url, verify=False, verbose=True, reboot=False)
             LOG.warning("OTA update ready, scheduling reboot")
             self.reboot(2)
             return {"ok": True, "status": "updating", "version": tag}
