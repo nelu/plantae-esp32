@@ -3,7 +3,7 @@ import gc
 
 import uasyncio as asyncio
 from ..adapters.config_manager import CFG
-import tasks
+from . import tasks
 
 from logging import LOG
 # from logging import Logger, DEBUG
