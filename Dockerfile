@@ -23,7 +23,11 @@ RUN mkdir -p /tmp/mpy-src && \
 
 
 RUN cd $MPY_PATH && make -C mpy-cross
-#RUN cd /opt/esp/idf && . /opt/esp/idf/export.sh && cd $MPY_PATH/ports/esp32 && make BOARD=ESP32_GENERIC BOARD_VARIANT=OTA
+COPY ./fw_config/ports/esp32 ${MPY_PATH}/ports/esp32
+
+RUN cd /opt/esp/idf && . /opt/esp/idf/export.sh && cd $MPY_PATH/ports/esp32 \
+    && make BOARD=ESP32_GENERIC BOARD_VARIANT=OTANOBLE && \
+    make BOARD=ESP32_GENERIC_S3 BOARD_VARIANT=OTA
 
 # Set permissions for shared folders
 RUN chmod 777 /opt $MPY_PATH
