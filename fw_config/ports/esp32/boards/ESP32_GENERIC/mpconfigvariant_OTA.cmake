@@ -5,5 +5,5 @@ set(SDKCONFIG_DEFAULTS
 )
 
 list(APPEND MICROPY_DEF_BOARD
-    MICROPY_HW_BOARD_NAME="Generic ESP32 module with OTA noble"
+    MICROPY_HW_BOARD_NAME="Plantae ESP32 module with OTA noBLE"
 )

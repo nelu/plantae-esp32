@@ -8,9 +8,18 @@ ARG MPY_VERSION=1.27.0
 ENV MPY_PATH=/micropython
 
 # Clone MicroPython with submodules so `make submodules` can run.
-RUN git clone --depth 1 --recurse-submodules --branch "v${MPY_VERSION}" \
-    https://github.com/micropython/micropython.git "${MPY_PATH}"
+#RUN git clone --depth 1 --recurse-submodules --branch "v${MPY_VERSION}" \
+#    https://github.com/micropython/micropython.git "${MPY_PATH}"
 
+RUN mkdir -p /tmp/mpy-src && \
+    (command -v curl >/dev/null 2>&1 && \
+     curl -L "https://github.com/micropython/micropython/releases/download/v${MPY_VERSION}/micropython-${MPY_VERSION}.tar.xz" -o /tmp/micropython.tar.xz || \
+     wget -O /tmp/micropython.tar.xz "https://github.com/micropython/micropython/releases/download/v${MPY_VERSION}/micropython-${MPY_VERSION}.tar.xz") && \
+    tar -xJf /tmp/micropython.tar.xz -C /tmp/mpy-src && \
+    srcdir="$(find /tmp/mpy-src -maxdepth 1 -type d -name 'micropython*' | head -n 1)" && \
+    test -n "$srcdir" && \
+    mv "$srcdir" ${MPY_PATH} && \
+    rm -rf /tmp/mpy-src /tmp/micropython.tar.xz
 
 
 RUN cd $MPY_PATH && make -C mpy-cross
