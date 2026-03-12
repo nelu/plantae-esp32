@@ -4,7 +4,7 @@ import os
 import sys
 
 
-def generate_ota_json(build_dir):
+def generate_ota_json(build_dir, fw_file_name=None):
     # Calea către binarul rezultat
     bin_path = os.path.join(build_dir, "micropython.bin")
     # Calea unde va fi salvat JSON-ul (tot în folderul de build)
@@ -20,7 +20,7 @@ def generate_ota_json(build_dir):
         length = len(data)
 
     output = {
-        "firmware": "micropython.bin",
+        "firmware": fw_file_name or "micropython.bin",
         "sha": sha,
         "length": length
     }
@@ -34,6 +34,6 @@ def generate_ota_json(build_dir):
 
 if __name__ == "__main__":
     if len(sys.argv) < 2:
-        print("Usage: python3 gen_ota.py <directory_build>")
+        print("Usage: python3 gen_ota.py <directory_build> <firmware_name.bin>")
     else:
-        generate_ota_json(sys.argv[1])
+        generate_ota_json(sys.argv[1], sys.argv[2] and sys.argv[2] or None)
