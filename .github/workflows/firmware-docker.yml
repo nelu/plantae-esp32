@@ -107,6 +107,6 @@ jobs:
         with:
           files: |
             firmware-esp32s3.json
-            plantae-esp32s3-micropython-ota
+            plantae-esp32s3-micropython-ota.bin
             firmware-esp32.json
-            plantae-esp32-micropython-ota
+            plantae-esp32-micropython-ota.bin
