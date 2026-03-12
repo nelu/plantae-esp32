@@ -42,7 +42,7 @@ class AlertManager(PersistentManager):
 class DeviceState:
 
     def __init__(self, device_id, stats_mgr=None):
-        from version import VERSION, BUILD_DATE
+        from ..version import VERSION, BUILD_DATE
 
         self.device_id = device_id
         self.boot_ms = time.ticks_ms()
