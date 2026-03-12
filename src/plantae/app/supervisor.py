@@ -54,14 +54,18 @@ class Supervisor:
 
         gc.collect()
 
-    @staticmethod
-    def confirm_firmware_boot():
+
+    def confirm_firmware_boot(self):
         if not getattr(CFG, "ota_capable", False):
             return
         try:
+            from ..adapters import device
+            if not device.pending_rollback():
+                return
             import ota.rollback
 
             ota.rollback.cancel()
+            self.state.alerts.clear_alert("firmware")
             LOG.info("OTA: firmware boot confirmed")
         except Exception as e:
             LOG.error("OTA: firmware confirm failed: %s", e)

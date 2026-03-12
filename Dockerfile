@@ -55,7 +55,9 @@ RUN chmod 775 /tmp/version.sh && /tmp/version.sh "${MPY_PATH}/ports/esp32/module
 RUN cd /opt/esp/idf && . /opt/esp/idf/export.sh && cd ${MPY_PATH}/ports/esp32/  \
 #    && make submodules \
     && make BOARD=ESP32_GENERIC BOARD_VARIANT=OTANOBLE && \
-    make BOARD=ESP32_GENERIC_S3 BOARD_VARIANT=OTA
+    python gen_ota.py build-ESP32_GENERIC-OTANOBLE && \
+    make BOARD=ESP32_GENERIC_S3 BOARD_VARIANT=OTA && \
+    python gen_ota.py build-ESP32_GENERIC_S3-OTA
 
 VOLUME ["${MPY_PATH}"]
 

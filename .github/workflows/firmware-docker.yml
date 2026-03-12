@@ -96,13 +96,17 @@ jobs:
       - name: Extract firmware binaries
         run: |
           docker create --name fw_extract fw_build:${{ github.run_id }}
-          docker cp fw_extract:/micropython/ports/esp32/build-ESP32_GENERIC_S3-OTA/micropython.bin ./micropython-esp32-plantae-s3-ota.bin
-          docker cp fw_extract:/micropython/ports/esp32/build-ESP32_GENERIC-OTANOBLE/micropython.bin ./micropython-esp32-plantae-ota.bin
+          docker cp fw_extract:/micropython/ports/esp32/build-ESP32_GENERIC_S3-OTA/micropython.bin ./plantae-esp32s3-micropython-ota.bin
+          docker cp fw_extract:/micropython/ports/esp32/build-ESP32_GENERIC_S3-OTA/firmware.json ./firmware-esp32s3.json
+          docker cp fw_extract:/micropython/ports/esp32/build-ESP32_GENERIC-OTANOBLE/micropython.bin ./plantae-esp32-micropython-ota.bin
+          docker cp fw_extract:/micropython/ports/esp32/build-ESP32_GENERIC-OTANOBLE/firmware.json ./firmware-esp32.json
           docker rm -f fw_extract
       - name: Upload release assets
         if: github.event_name == 'release'
         uses: softprops/action-gh-release@v2
         with:
           files: |
+            firmware-esp32s3.json
             micropython-esp32-plantae-s3-ota.bin
+            firmware-esp32.json
             micropython-esp32-plantae-ota.bin

@@ -101,7 +101,7 @@ class DeviceService:
 
             gc.collect()
             LOG.info("OTA update: firmware=%s", fw_url)
-            ota.update.from_file(fw_url, verify=False, verbose=True, reboot=False)
+            ota.update.from_json(fw_url, verify=True, verbose=True, reboot=False)
             LOG.warning("OTA update ready, scheduling reboot")
             self.reboot(2)
             return {"ok": True, "status": "updating", "version": fw_url}

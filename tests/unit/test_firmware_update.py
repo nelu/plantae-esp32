@@ -107,10 +107,11 @@ class FirmwareUpdateTests(unittest.TestCase):
         sys.modules.clear()
         sys.modules.update(self._saved)
 
-    def _load_cfg(self, ota_ready):
+    def _load_cfg(self, ota_ready, ota_pending=False):
         ota_pkg = types.ModuleType("ota")
         ota_status = types.ModuleType("ota.status")
         ota_status.ready = lambda: ota_ready
+        ota_status.pending_rollback = lambda: ota_pending
         ota_pkg.status = ota_status
         sys.modules["ota"] = ota_pkg
         sys.modules["ota.status"] = ota_status
@@ -170,7 +171,7 @@ class FirmwareUpdateTests(unittest.TestCase):
         self.assertFalse(cfg_mod.CFG.ota_capable)
 
     def test_supervisor_confirms_firmware_boot(self):
-        self._load_cfg(True)
+        self._load_cfg(True, ota_pending=True)
 
         called = {"cancel": False}
 
@@ -185,7 +186,9 @@ class FirmwareUpdateTests(unittest.TestCase):
         import app.supervisor as supervisor
 
         supervisor = importlib.reload(supervisor)
-        supervisor.Supervisor.confirm_firmware_boot()
+        sup = supervisor.Supervisor.__new__(supervisor.Supervisor)
+        sup.state = _DummyState()
+        supervisor.Supervisor.confirm_firmware_boot(sup)
 
         self.assertTrue(called["cancel"])
 
