@@ -15,17 +15,17 @@ if [ -f "$VERSION_FILE" ]; then
     fi
 
     if [ -n "$APP_VERSION_VALUE" ]; then
-      if sed -E "s/^VERSION\s*=\s*\".*\"/VERSION = \"${APP_VERSION_VALUE}\"/" "$VERSION_FILE" >"$tmp_file"; then
-          echo "$(date '+%Y-%m-%d %H:%M:%S') Updated VERSION in $VERSION_FILE to ${APP_VERSION_VALUE}"
-      else
-          rm -f "$tmp_file"
-          echo "$(date '+%Y-%m-%d %H:%M:%S') Failed updating VERSION in $VERSION_FILE" >&2
-          exit 1
-      fi
+        if sed -i -E "s/^VERSION\s*=\s*\".*\"/VERSION = \"${APP_VERSION_VALUE}\"/" "$tmp_file"; then
+            echo "$(date '+%Y-%m-%d %H:%M:%S') Updated VERSION in $VERSION_FILE to ${APP_VERSION_VALUE}"
+        else
+            rm -f "$tmp_file"
+            echo "$(date '+%Y-%m-%d %H:%M:%S') Failed updating VERSION in $VERSION_FILE" >&2
+            exit 1
+        fi
+    fi
 
-      mv "$tmp_file" "$VERSION_FILE"
+    mv "$tmp_file" "$VERSION_FILE"
 
-  fi
 else
     echo "$(date '+%Y-%m-%d %H:%M:%S') Missing $VERSION_FILE" >&2
     exit 1
