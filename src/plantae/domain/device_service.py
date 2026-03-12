@@ -1,5 +1,5 @@
 from logging import LOG
-from version import INDICATOR_LED, INDICATOR_LED_RGB
+from ..version import INDICATOR_LED, INDICATOR_LED_RGB
 import uasyncio as asyncio
 
 
@@ -76,6 +76,19 @@ class DeviceService:
         self._schedule_reboot(timeout_s)
         return True
 
+    async def _do_upgrade(self, fw_url):
+        import ota.update
+        try:
+            ota.update.from_json(fw_url, verify=True, verbose=True, reboot=False)
+            LOG.warning("OTA update ready, scheduling reboot")
+            self.reboot(2)
+        except Exception as e:
+            LOG.error("OTA update failed: %s", e)
+            self.set_alert("firmware", "update failed")
+            return {"ok": False, "error": "update_failed", "reason": str(e)}
+        finally:
+            self._ota_update_in_progress = False
+
     def update_firmware(self, version):
         from ..adapters.config_manager import CFG
 
@@ -95,25 +108,17 @@ class DeviceService:
 
         self._ota_update_in_progress = True
 
-        try:
-            import gc
-            import ota.update
 
-            gc.collect()
-            LOG.info("OTA update: firmware=%s", fw_url)
-            ota.update.from_json(fw_url, verify=True, verbose=True, reboot=False)
-            LOG.warning("OTA update ready, scheduling reboot")
-            self.reboot(2)
-            return {"ok": True, "status": "updating", "version": fw_url}
-        except Exception as e:
-            LOG.error("OTA update failed: %s", e)
-            try:
-                self.set_alert("firmware", "update failed")
-            except Exception:
-                pass
-            return {"ok": False, "error": "update_failed", "reason": str(e)}
-        finally:
-            self._ota_update_in_progress = False
+        import gc
+        # import ota.update
+
+        gc.collect()
+        LOG.info("OTA update: firmware=%s", fw_url)
+        asyncio.create_task(self._do_upgrade(fw_url))
+        # ota.update.from_json(fw_url, verify=True, verbose=True, reboot=False)
+        # self.reboot(2)
+        return {"ok": True, "status": "updating", "version": fw_url}
+
 
     def shutdown_outputs(self):
         """Safely release active outputs before reboot/reset."""
