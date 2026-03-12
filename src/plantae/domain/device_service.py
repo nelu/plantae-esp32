@@ -1,6 +1,7 @@
 from logging import LOG
 from ..version import INDICATOR_LED, INDICATOR_LED_RGB
 import uasyncio as asyncio
+from ..adapters.config_manager import CFG
 
 
 class DeviceService:
@@ -63,7 +64,6 @@ class DeviceService:
         return self.state.snapshot()
 
     def get_config(self):
-        from ..adapters.config_manager import CFG
         return CFG.data
 
     def patch_config(self, patch):
@@ -88,6 +88,21 @@ class DeviceService:
             return {"ok": False, "error": "update_failed", "reason": str(e)}
         finally:
             self._ota_update_in_progress = False
+
+    def confirm_firmware_boot(self):
+        if not CFG.ota_capable:
+            return
+        try:
+            from ..adapters import device
+            if not device.pending_rollback():
+                return
+            import ota.rollback
+
+            ota.rollback.cancel()
+            self.state.alerts.clear_alert("firmware")
+            LOG.info("OTA: firmware boot confirmed")
+        except Exception as e:
+            LOG.error("OTA: firmware confirm failed: %s", e)
 
     def update_firmware(self, version):
         from ..adapters.config_manager import CFG

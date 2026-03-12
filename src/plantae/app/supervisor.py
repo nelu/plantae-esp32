@@ -55,20 +55,6 @@ class Supervisor:
         gc.collect()
 
 
-    def confirm_firmware_boot(self):
-        if not getattr(CFG, "ota_capable", False):
-            return
-        try:
-            from ..adapters import device
-            if not device.pending_rollback():
-                return
-            import ota.rollback
-
-            ota.rollback.cancel()
-            self.state.alerts.clear_alert("firmware")
-            LOG.info("OTA: firmware boot confirmed")
-        except Exception as e:
-            LOG.error("OTA: firmware confirm failed: %s", e)
 
     async def _announce_reboot(self):
         if self.wamp:
@@ -158,7 +144,7 @@ class Supervisor:
 
 
             LOG.info("supervisor: tasks started")
-            self.confirm_firmware_boot()
+            self.service.confirm_firmware_boot()
 
             loop_count = 0
             while True:
