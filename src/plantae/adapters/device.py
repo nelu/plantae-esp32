@@ -44,11 +44,9 @@ def sync_rtc_via_ntp(host="pool.ntp.org", retries=3, tz_offset_min=0):
         try:
             ntptime.settime()
             unix_2020 = 1577836800
-            micropython_2020 = unix_2020 - DEFAULT_UNIX_EPOCH_OFFSET
             now_utc = time.time()
-            if now_utc > micropython_2020:
-                ts_utc = now_utc
-                if set_rtc_local_from_utc(ts_utc, tz_offset_min):
+            if now_utc > unix_2020:
+                if set_rtc_local_from_utc(now_utc, tz_offset_min):
                     return True
         except Exception:
             if attempt < int(retries) - 1:
