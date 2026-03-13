@@ -50,10 +50,8 @@ def sync_rtc_via_ntp(host="pool.ntp.org", retries=3, tz_offset_min=0):
                     return True
         except Exception:
             if attempt < int(retries) - 1:
-                try:
-                    time.sleep(2)
-                except Exception:
-                    pass
+                time.sleep(2)
+
     return False
 
 

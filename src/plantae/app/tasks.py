@@ -186,7 +186,6 @@ async def task_http(sup):
 
 async def task_wamp(sup):
     LOG.info("task_wamp: started")
-    ntp_quiet_done = False
     fail_count = 0
 
     while not sup.has_reboot_scheduled():
@@ -194,13 +193,9 @@ async def task_wamp(sup):
             await asyncio.sleep(2)
             continue
 
-        if not sup.state.ntp_ok:
-            await asyncio.sleep(2)
-            continue
-
-        if not ntp_quiet_done:
-            ntp_quiet_done = True
-            await asyncio.sleep(3)
+        # if not sup.state.ntp_ok:
+        #     await asyncio.sleep(2)
+        #     continue
 
         try:
             _log_mem("task_wamp: pre-start")

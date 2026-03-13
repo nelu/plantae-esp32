@@ -41,18 +41,18 @@ class Wifi:
             return self.sta.isconnected()
         self._last_connect_ms = now
 
-        try:
-            self.sta.connect(ssid, password)
-        except OSError:
-            try:
-                self.sta.active(False)
-                time.sleep(2)
-                self.sta.active(True)
-            except Exception:
-                pass
-            return False
 
         for _ in range(int(timeout_s * 2)):
+            try:
+                self.sta.connect(ssid, password)
+            except OSError as e:
+                try:
+                    self.sta.active(False)
+                    time.sleep(2)
+                    self.sta.active(True)
+                except Exception:
+                    pass
+                print('Got connect error: %s' % e)
             if self.sta.isconnected():
                 return True
             time.sleep(1)
