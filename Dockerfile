@@ -58,9 +58,9 @@ RUN cd /opt/esp/idf && . /opt/esp/idf/export.sh && cd ${MPY_PATH}/ports/esp32/  
 
 COPY ./build /tmp/build
 RUN chmod -R 775 /tmp/build && /tmp/build/version.sh "${MPY_PATH}/ports/esp32/modules/plantae/version.py" \
-    && /tmp/build/compile.sh "${MPY_PATH}/ports/esp32/modules/plantae" "/plantae" \
+    && /tmp/build/compile.sh "${MPY_PATH}/ports/esp32/modules/plantae" "/plantae" "${MPY_PATH}/mpy-cross/build/mpy-cross" \
     && rm -rf "${MPY_PATH}/ports/esp32/modules/plantae" \
-    && tar -czf "${MPY_PATH}/ports/esp32/plantae-flash.tar.gz" -C /plantae
+    && tar -czf "${MPY_PATH}/ports/esp32/plantae-flash.tar.gz" /plantae
 
 VOLUME ["${MPY_PATH}"]
 

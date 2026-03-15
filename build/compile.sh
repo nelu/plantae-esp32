@@ -1,7 +1,7 @@
 #!/bin/bash
 
 # Configuration
-MPY_CROSS="mpy-cross"
+MPY_CROSS="${3:-mpy\-cross}"
 SRC_DIR="${1:-src}"
 DIST_DIR="${2:-dist}"
 
