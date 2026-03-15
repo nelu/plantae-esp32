@@ -41,6 +41,48 @@ def open_url(url_or_filename: str, **kw) -> io.BufferedReader:
         return open(url_or_filename, "rb")
 
 
+def _resolve_relative_url(base: str, value: str) -> str:
+    if any(value.startswith(s) for s in ("https:", "http:", "/")):
+        return value
+    if "/" in base:
+        baseurl, *_ = base.rsplit("/", 1)
+        return "%s/%s" % (baseurl, value)
+    return value
+
+
+def _load_update_manifest(url: str, **kw) -> dict:
+    if not url.endswith(".json"):
+        raise ValueError("Url does not end with '.json'")
+    with open_url(url, **kw) as f:
+        from json import load
+
+        data = load(f)
+    if not isinstance(data, dict):
+        raise ValueError("OTA json must contain a json object")
+    return data
+
+
+def _parse_firmware_manifest(url: str, data: dict) -> tuple[str, str, int]:
+    try:
+        firmware: str = data["firmware"]
+        sha: str = data["sha"]
+        length: int = int(data["length"])
+    except KeyError as err:
+        print('OTA json must include "firmware", "sha" and "length" keys.')
+        raise err
+    firmware = _resolve_relative_url(url, firmware)
+    return firmware, sha, length
+
+
+def _parse_flash_manifest(url: str, data: dict) -> str:
+    flash = data.get("flash", "")
+    if not flash:
+        return ""
+    if not isinstance(flash, str):
+        raise ValueError('OTA json key "flash" must be a string')
+    return _resolve_relative_url(url, flash)
+
+
 # OTA manages a MicroPython firmware update over-the-air. It checks that there
 # are at least two "ota" "app" partitions in the partition table and writes new
 # firmware into the partition that is not currently running. When the update is
@@ -117,26 +159,31 @@ class OTA:
     # - url: the name of a file or url containing the json.
     # - kw: extra keywords arguments that will be passed to `requests.get()`
     def from_json(self, url: str, **kw) -> int:
-        if not url.endswith(".json"):
-            raise ValueError("Url does not end with '.json'")
         if self.verbose:
             print(f"Opening json file {url}...")
-        with open_url(url, **kw) as f:
-            from json import load
+        data = _load_update_manifest(url, **kw)
+        firmware, sha, length = _parse_firmware_manifest(url, data)
+        return self.from_firmware_file(firmware, sha, length, **kw)
 
-            data: dict = load(f)
-        try:
-            firmware: str = data["firmware"]
-            sha: str = data["sha"]
-            length: int = data["length"]
-            if not any(firmware.startswith(s) for s in ("https:", "http:", "/")):
-                # If firmware filename is relative, append to base of url of json file
-                baseurl, *_ = url.rsplit("/", 1)
-                firmware = f"{baseurl}/{firmware}"
-            return self.from_firmware_file(firmware, sha, length, **kw)
-        except KeyError as err:
-            print('OTA json must include "firmware", "sha" and "length" keys.')
-            raise err
+
+def update_from_json(url: str, verify=True, verbose=True, reboot=True, **kw) -> None:
+    if verbose:
+        print(f"Opening json file {url}...")
+
+    data = _load_update_manifest(url, **kw)
+    firmware, sha, length = _parse_firmware_manifest(url, data)
+    flash = _parse_flash_manifest(url, data)
+
+    with OTA(verify, verbose, reboot=False) as ota_update:
+        ota_update.from_firmware_file(firmware, sha, length, **kw)
+
+    if flash:
+        from . import uota
+
+        uota.install_from_tar_url(flash, verbose=verbose, **kw)
+
+    if reboot:
+        ota_reboot()
 
 
 # Convenience functions which use the OTA class to perform OTA updates.
@@ -148,5 +195,4 @@ def from_file(
 
 
 def from_json(url: str, verify=True, verbose=True, reboot=True, **kw) -> None:
-    with OTA(verify, verbose, reboot) as ota_update:
-        ota_update.from_json(url, **kw)
+    update_from_json(url, verify=verify, verbose=verbose, reboot=reboot, **kw)

@@ -2,10 +2,10 @@
 
 # Configuration
 MPY_CROSS="mpy-cross"
-SRC_DIR="src"
-DIST_DIR="dist"
+SRC_DIR="${1:-src}"
+DIST_DIR="${2:-dist}"
 
-./version.sh src/version.py
+#./version.sh src/version.py
 
 echo "$(date '+%Y-%m-%d %H:%M:%S') Building Production Image in $DIST_DIR..."
 
@@ -14,7 +14,8 @@ rm -rf "$DIST_DIR"
 mkdir -p "$DIST_DIR"
 
 # 2. Copy Assets (main.py, etc)
-ASSETS=("boot.py" "main.py" "provision.html")
+ASSETS=("provision.html")
+#ASSETS=("boot.py" "main.py" "provision.html")
 for asset in "${ASSETS[@]}"; do
     if [ -f "$SRC_DIR/$asset" ]; then
         cp "$SRC_DIR/$asset" "$DIST_DIR/$asset"
@@ -24,38 +25,39 @@ done
 
 # 3. Files to Compile
 FILES=(
-    "version.py"
+    "__init__.py"
 
 #    "protocols/mpautobahn/__init__.py"
 #    "protocols/mpautobahn/client.py"
 #    "protocols/mpautobahn/constants.py"
 
-    "adapters/wamp_bridge.py"
     "adapters/config_manager.py"
-    "adapters/wifi.py"
     "adapters/device.py"
     "adapters/http_api.py"
+    "adapters/wamp_bridge.py"
+    "adapters/wifi.py"
 
     "app/bootstrap.py"
-    "app/supervisor.py"
     "app/provision.py"
+    "app/supervisor.py"
     "app/tasks.py"
 
-    "domain/state.py"
-    "domain/stats.py"
-    "domain/dosing.py"
-    "domain/scheduler.py"
     "domain/controllers.py"
     "domain/device_service.py"
+    "domain/dosing.py"
+    "domain/scheduler.py"
+    "domain/state.py"
+    "domain/stats.py"
     
     "drivers/pca9685.py"
     "drivers/pwm_out.py"
     "drivers/flowsensor.py"
 
+    "version.py"
 
-    "lib/datetime.py"
-    "lib/file_store.py"
-    "lib/mp_wamp_client.py"
+#    "lib/datetime.py"
+#    "lib/file_store.py"
+#    "lib/mp_wamp_client.py"
 #    "lib/logging.py"
 #    "lib/async_websocket_client/__init__.py"
 #    "lib/async_websocket_client/ws.py"

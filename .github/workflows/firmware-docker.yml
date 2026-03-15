@@ -100,6 +100,7 @@ jobs:
           docker cp fw_extract:/micropython/ports/esp32/build-ESP32_GENERIC_S3-OTA/firmware.json ./firmware-esp32s3.json
           docker cp fw_extract:/micropython/ports/esp32/build-ESP32_GENERIC-OTANOBLE/micropython.bin ./plantae-esp32-micropython-ota.bin
           docker cp fw_extract:/micropython/ports/esp32/build-ESP32_GENERIC-OTANOBLE/firmware.json ./firmware-esp32.json
+          docker cp fw_extract:/micropython/ports/esp32/plantae-flash.tar.gz ./plantae-flash.tar.gz
           docker rm -f fw_extract
       - name: Upload release assets
         if: github.event_name == 'release'
@@ -110,3 +111,4 @@ jobs:
             plantae-esp32s3-micropython-ota.bin
             firmware-esp32.json
             plantae-esp32-micropython-ota.bin
+            plantae-flash.tar.gz

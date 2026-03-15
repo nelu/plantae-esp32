@@ -48,16 +48,20 @@ WORKDIR ${MPY_PATH}
 COPY ./src ${MPY_PATH}/ports/esp32/modules
 COPY ./fw_config/ports/esp32 ${MPY_PATH}/ports/esp32
 
-COPY version.sh /tmp/version.sh
+COPY build /tmp/
 
-RUN chmod 775 /tmp/version.sh && /tmp/version.sh "${MPY_PATH}/ports/esp32/modules/plantae/version.py"
+RUN chmod -R 775 /tmp/build && /tmp/build/version.sh "${MPY_PATH}/ports/esp32/modules/plantae/version.py" \
+    && /tmp/build/compile.sh "${MPY_PATH}/ports/esp32/modules/plantae" "/plantae" \
+    && rm -rf "${MPY_PATH}/ports/esp32/modules/plantae"
 
 RUN cd /opt/esp/idf && . /opt/esp/idf/export.sh && cd ${MPY_PATH}/ports/esp32/  \
 #    && make submodules \
-    && make BOARD=ESP32_GENERIC BOARD_VARIANT=OTANOBLE && \
-    python gen_ota.py build-ESP32_GENERIC-OTANOBLE plantae-esp32-micropython-ota.bin && \
-    make BOARD=ESP32_GENERIC_S3 BOARD_VARIANT=OTA && \
-    python gen_ota.py build-ESP32_GENERIC_S3-OTA plantae-esp32s3-micropython-ota.bin
+    && tar -czf plantae-flash.tar.gz -C /plantae \
+    && make BOARD=ESP32_GENERIC BOARD_VARIANT=OTANOBLE \
+    && python gen_ota.py build-ESP32_GENERIC-OTANOBLE plantae-esp32-micropython-ota.bin plantae-flash.tar.gz \
+    && make BOARD=ESP32_GENERIC_S3 BOARD_VARIANT=OTA \
+    && python gen_ota.py build-ESP32_GENERIC_S3-OTA plantae-esp32s3-micropython-ota.bin plantae-flash.tar.gz
+
 
 VOLUME ["${MPY_PATH}"]
 
