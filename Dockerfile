@@ -48,10 +48,14 @@ WORKDIR ${MPY_PATH}
 COPY ./src ${MPY_PATH}/ports/esp32/modules
 COPY ./fw_config/ports/esp32 ${MPY_PATH}/ports/esp32
 COPY ./build /tmp/build
+#RUN chmod -R 775 /tmp/build && /tmp/build/version.sh "${MPY_PATH}/ports/esp32/modules/plantae/version.py" \
+#    && /tmp/build/compile.sh "${MPY_PATH}/ports/esp32/modules/plantae" "/plantae" "${MPY_PATH}/mpy-cross/build/mpy-cross" \
+#    && rm -rf "${MPY_PATH}/ports/esp32/modules/plantae" \
+#    && tar -czf "${MPY_PATH}/ports/esp32/plantae-flash.tar.gz" /plantae
+
 RUN chmod -R 775 /tmp/build && /tmp/build/version.sh "${MPY_PATH}/ports/esp32/modules/plantae/version.py" \
-    && /tmp/build/compile.sh "${MPY_PATH}/ports/esp32/modules/plantae" "/plantae" "${MPY_PATH}/mpy-cross/build/mpy-cross" \
-    && rm -rf "${MPY_PATH}/ports/esp32/modules/plantae" \
-    && tar -czf "${MPY_PATH}/ports/esp32/plantae-flash.tar.gz" /plantae
+    && tar -czf "${MPY_PATH}/ports/esp32/plantae-flash.tar.gz" "${MPY_PATH}/ports/esp32/modules/plantae/provision.html" \
+    && rm -rf "${MPY_PATH}/ports/esp32/modules/plantae/provision.html"
 
 RUN cd /opt/esp/idf && . /opt/esp/idf/export.sh && cd ${MPY_PATH}/ports/esp32/  \
 #    && make submodules \
