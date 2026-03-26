@@ -68,8 +68,7 @@ async def task_reboot_watch(sup):
 async def task_ntp(sup):
     from ..adapters.device import sync_rtc_via_ntp
     ntp_cfg = CFG.data.get("ntp", {})
-    #every = int(ntp_cfg.get("sync_every_s", 21600))
-    every = 200
+    every = int(ntp_cfg.get("sync_every_s", 21600))
 
     host = ntp_cfg.get("host", "pool.ntp.org")
     initial_sync = True
@@ -82,14 +81,12 @@ async def task_ntp(sup):
             success = sync_rtc_via_ntp(host, retries=3, tz_offset_min=tz_offset)
             sup.state.ntp_ok = bool(success)
             if success:
-                LOG.debug("NTP: synced")
                 if initial_sync:
                     initial_sync = False
                     await asyncio.sleep(every)
                 else:
                     await asyncio.sleep(every)
             else:
-                LOG.debug("NTP: sync failed")
                 retry_interval = 10 if initial_sync else 60
                 await asyncio.sleep(retry_interval)
         else:
