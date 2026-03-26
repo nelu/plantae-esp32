@@ -54,7 +54,7 @@ COPY ./build /tmp/build
 #    && tar -czf "${MPY_PATH}/ports/esp32/plantae-flash.tar.gz" /plantae
 
 RUN chmod -R 775 /tmp/build && /tmp/build/version.sh "${MPY_PATH}/ports/esp32/modules/plantae/version.py" \
-    && tar -czf "${MPY_PATH}/ports/esp32/plantae-flash.tar.gz" "${MPY_PATH}/ports/esp32/modules/plantae/provision.html" \
+    && tar -czf "${MPY_PATH}/ports/esp32/plantae-flash.tar.gz" -C "${MPY_PATH}/ports/esp32/modules/plantae" "provision.html" \
     && rm -rf "${MPY_PATH}/ports/esp32/modules/plantae/provision.html"
 
 RUN cd /opt/esp/idf && . /opt/esp/idf/export.sh && cd ${MPY_PATH}/ports/esp32/  \

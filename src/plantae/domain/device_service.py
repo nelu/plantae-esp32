@@ -38,6 +38,7 @@ class DeviceService:
         from ..drivers.pwm_out import PwmOut
         from ..drivers.flowsensor import FlowSensor, flowtypes
         from .dosing import DosingController
+        import machine
 
         pwm_cfg = cfg_data["outputs"]["pwm"]
         fcfg = cfg_data["flow"]
@@ -46,7 +47,9 @@ class DeviceService:
         self.pwm = PwmOut(pwm_cfg["pin"], pwm_cfg.get("freq", 1000), pwm_cfg.get("active_low", False))
 
         self.flow = FlowSensor(ppl, fcfg.get("pin", 34))
+        #self.flow.begin(pullup=bool(fcfg.get("pullup_external", True)), trigger=machine.Pin.IRQ_RISING)
         self.flow.begin(pullup=bool(fcfg.get("pullup_external", True)))
+
         self.publish_alerts = wamp_bridge.publish_alerts
 
         self.dosing = DosingController(

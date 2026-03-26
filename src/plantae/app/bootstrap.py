@@ -23,14 +23,15 @@ def _maybe_factory_reset_button(hold_time_s=5, wait_window_s=5):
         time.sleep_ms(window_ms)
         return False
 
+    active_low = btn_cfg.get("active_low", True)
+
     try:
-        btn = Pin(pin_num, Pin.IN)
+        btn = Pin(pin_num, Pin.IN, pull=active_low and Pin.PULL_UP or Pin.PULL_DOWN)
     except Exception as e:
         if LOG: LOG.error("factory_reset: cannot init pin %s: %s", pin_num, e)
         time.sleep_ms(window_ms)
         return False
 
-    active_low = btn_cfg.get("active_low", True)
     required_state = 0 if active_low else 1
 
     pressed_start = None
@@ -92,14 +93,15 @@ def init_boot():
 
         tz_offset = int(CFG.data.get("tz_offset_min", 0))
         try:
-            synced = wifi.ensure_sync(ssid, pwd) and sync_rtc_via_ntp(tz_offset_min = tz_offset, retries=1)
+            net_con = wifi.ensure_sync(ssid, pwd)
+            synced = net_con and sync_rtc_via_ntp(tz_offset_min = tz_offset, retries=1)
 
             if synced:
                 stats.save()
             else:
                 # use last saved time (aproximate)
                 last_time = stats.data.get('last_time_sync_ts')
-                LOG.warning("_init_boot: Network failure - using last ts %s", last_time)
+                LOG.warning("_init_boot: Network failure - using last ts %s %s", last_time, net_con)
 
                 last_time and set_rtc_local_from_utc(last_time)
 

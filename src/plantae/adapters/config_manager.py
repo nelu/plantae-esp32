@@ -18,7 +18,7 @@ def detect_ota_capable():
 
 def default_cfg():
     return {
-        "tz_offset_min": 120,
+        "tz_offset_min": 0,
         "wifi": {"ssid": "", "password": ""},
         "wamp": {
             "url": "wss://plantae.robits.org/ws",
@@ -32,8 +32,8 @@ def default_cfg():
         },
         "inputs": {
             "pwm_test_btn": {
-                "pin": 35,
-                "active_low": False,
+                "pin": 13,
+                "active_low": True,
                 "test_duty": 0.5
             }
         },
