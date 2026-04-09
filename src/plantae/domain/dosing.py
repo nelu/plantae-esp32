@@ -162,9 +162,7 @@ class DosingController:
             # LOG.debug('not in dosing days last %s current %s', str(self.last_auto_dose_day), str(current_day))
             return
 
-        # match current day to list index
-        # 0-
-        day_idx = local_wday() - 1
+        day_idx = local_wday()
         start_str = days[day_idx]
 
         LOG.info('today %s dosing schedule %s - cfg %s', day_idx, start_str, str(days))

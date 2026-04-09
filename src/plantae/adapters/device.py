@@ -4,7 +4,7 @@ import time
 import ntptime
 
 from machine import RTC
-from datetime import unix_now
+from datetime import unix_now, DEFAULT_UNIX_EPOCH_OFFSET
 from logging import LOG
 
 
@@ -25,8 +25,9 @@ def pending_rollback() -> bool:
         return False
     return False
 
-def set_rtc_local_from_utc(ts_utc, tz_offset_min=0):
+def set_rtc_local_from_utc(ts_utc=None, tz_offset_min=0):
     """Set RTC to local time derived from UTC timestamp and tz offset."""
+    ts_utc = ts_utc and ts_utc - DEFAULT_UNIX_EPOCH_OFFSET or time.time()
     try:
         local_ts = int(float(ts_utc) + int(tz_offset_min) * 60)
         dt = time.localtime(local_ts)
@@ -46,7 +47,7 @@ def sync_rtc_via_ntp(host="pool.ntp.org", retries=3, tz_offset_min=0):
             unix_2020 = 1577836800
             now_utc = unix_now()
             if now_utc > unix_2020:
-                if set_rtc_local_from_utc(now_utc, tz_offset_min):
+                if set_rtc_local_from_utc(tz_offset_min=tz_offset_min):
                     LOG.info("NTP sync: OK %s", now_utc)
                     return True
         except Exception as e:
