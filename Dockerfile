@@ -69,3 +69,13 @@ RUN cd /opt/esp/idf && . /opt/esp/idf/export.sh && cd ${MPY_PATH}/ports/esp32/  
 VOLUME ["${MPY_PATH}"]
 
 CMD [ "/bin/bash" ]
+
+FROM scratch AS fw_artifacts
+
+COPY --from=fw_build /micropython/ports/esp32/build-ESP32_GENERIC-OTANOBLE/micropython.bin /plantae-esp32-micropython-ota.bin
+COPY --from=fw_build /micropython/ports/esp32/build-ESP32_GENERIC-OTANOBLE/firmware.bin /plantae-esp32-firmware-ota.bin
+COPY --from=fw_build /micropython/ports/esp32/build-ESP32_GENERIC-OTANOBLE/firmware.json /firmware-esp32.json
+COPY --from=fw_build /micropython/ports/esp32/build-ESP32_GENERIC_S3-OTA/micropython.bin /plantae-esp32s3-micropython-ota.bin
+COPY --from=fw_build /micropython/ports/esp32/build-ESP32_GENERIC_S3-OTA/firmware.bin /plantae-esp32s3-firmware-ota.bin
+COPY --from=fw_build /micropython/ports/esp32/build-ESP32_GENERIC_S3-OTA/firmware.json /firmware-esp32s3.json
+COPY --from=fw_build /micropython/ports/esp32/plantae-flash.tar.gz /plantae-flash.tar.gz
