@@ -23,7 +23,7 @@ class StatsManager(PersistentManager):
 
 
     def save(self):
-        self.data["last_time_sync_ts"] = time.time()
+        self.data["last_time_sync_ts"] = datetime.unix_now()
         super().save()
 
     def attach_state(self, state):

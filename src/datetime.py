@@ -5,7 +5,7 @@ DEFAULT_UNIX_EPOCH_OFFSET = 946684800
 
 
 def _localtime():
-    return time.localtime(time.time())
+    return time.localtime()
 
 
 def parse_hhmm(s):
@@ -25,7 +25,7 @@ def local_time_tuple():
 
 def local_wday():
     lt = _localtime()
-    return (int(lt[6]) - 1) % 7
+    return int(lt[6])
 
 
 def ts_to_local_day(ts):
@@ -33,7 +33,7 @@ def ts_to_local_day(ts):
 
 
 def current_local_day():
-    return ts_to_local_day(time.time())
+    return ts_to_local_day(unix_now())
 
 
 def unix_now():

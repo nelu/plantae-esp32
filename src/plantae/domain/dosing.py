@@ -1,6 +1,6 @@
 import uasyncio as asyncio
 
-from datetime import current_local_day, local_wday, parse_hhmm, ts_to_local_day
+from datetime import current_local_day, local_wday, parse_hhmm, ts_to_local_day, unix_now
 import time
 
 from logging import LOG
@@ -55,7 +55,7 @@ class DosingController:
         self._is_manual_dose = is_manual
         self.dose_start_volume = self.flow_sensor.volume_l
         self.target_quantity = float(quantity_l)
-        self.dose_start_time = time.time()
+        self.dose_start_time = unix_now()
 
         # Start the output at full duty
         self.output_controller.set(output_duty)
@@ -79,7 +79,7 @@ class DosingController:
             self.state.pwm_duty = 0.0
         
         dosed_volume = self.flow_sensor.volume_l - self.dose_start_volume
-        duration = time.time() - self.dose_start_time
+        duration = unix_now() - self.dose_start_time
         
         LOG.info("Stopped dosing: target=%.3f L, actual=%.3f L, duration=%.1f s", 
                  self.target_quantity, dosed_volume, duration)
@@ -100,7 +100,7 @@ class DosingController:
             
         dosed_volume = self.flow_sensor.volume_l - self.dose_start_volume
         remaining = max(0.0, self.target_quantity - dosed_volume)
-        duration = time.time() - self.dose_start_time
+        duration = unix_now() - self.dose_start_time
         
         return {
             "active": True,
@@ -128,7 +128,7 @@ class DosingController:
             return
             
         # Check timeout
-        duration = time.time() - self.dose_start_time
+        duration = unix_now() - self.dose_start_time
         if duration > self.timeout_s:
             LOG.error("Dosing timeout after %.1f seconds", duration)
             self.alert_set("dosing", "timeout", ts=self.dose_start_time)
@@ -142,7 +142,7 @@ class DosingController:
                      dosed_volume, duration)
 
             if not self._is_manual_dose and self.stats:
-                self.stats.record_dose(time.time(), persist_immediately=True)
+                self.stats.record_dose(unix_now(), persist_immediately=True)
                 self.last_auto_dose_day = current_local_day()
             self.stop_dose()
             return
@@ -162,10 +162,12 @@ class DosingController:
             # LOG.debug('not in dosing days last %s current %s', str(self.last_auto_dose_day), str(current_day))
             return
 
-        day_idx = local_wday()
+        # match current day to list index
+        # 0-
+        day_idx = local_wday() - 1
         start_str = days[day_idx]
 
-        # LOG.info('today %s dosing schedule %s - cfg %s', day_idx, start_str, str(days))
+        LOG.info('today %s dosing schedule %s - cfg %s', day_idx, start_str, str(days))
 
         if not start_str:
             return
@@ -175,7 +177,7 @@ class DosingController:
         except Exception:
             LOG.error("Invalid dosing time for day %d: %s", day_idx, start_str)
             return
-        # LOG.info('today %s dosing schedule %s - cfg %s ; start_min %s', day_idx, start_str, str(days), start_min)
+        LOG.info('today %s dosing schedule %s - cfg %s ; start_min %s', day_idx, start_str, str(days), start_min)
 
         if local_minutes >= start_min:
             quantity = float(dosing_cfg.get("quantity", 0) or 0)

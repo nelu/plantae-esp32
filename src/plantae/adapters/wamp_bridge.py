@@ -3,6 +3,7 @@ import time
 
 import uasyncio as asyncio
 
+from datetime import unix_now
 from logging import LOG
 
 from ..adapters.config_manager import CFG
@@ -276,7 +277,7 @@ class WampBridge:
             "ip": self.service.state.ip,
             "ver": self.service.state.version,
             "build": self.service.state.build,
-            "ts": time.time(),
+            "ts": unix_now(),
             "config": CFG.data,
             "alerts": self.service.state.alerts.data
         }

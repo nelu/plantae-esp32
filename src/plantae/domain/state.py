@@ -1,7 +1,7 @@
 import time, gc
 
 from file_store import PersistentManager
-from datetime import DEFAULT_UNIX_EPOCH_OFFSET
+from datetime import DEFAULT_UNIX_EPOCH_OFFSET, unix_now
 
 
 class AlertManager(PersistentManager):
@@ -77,7 +77,7 @@ class DeviceState:
         return {
             "id": self.device_id,
             "ip": self.ip,
-            "utc": time.time(),
+            "utc": unix_now(),
             "uptime_s": self.uptime_s(),
             "heap": gc.mem_free(),
             "flow": {"lps": self.flow_lps, "lpm": self.flow_lpm, "vol_l": self.volume_l, "pulses": self.pulses},

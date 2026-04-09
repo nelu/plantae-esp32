@@ -1,6 +1,8 @@
 import os
 import time
 import gc
+
+from datetime import unix_now
 from logging import LOG
 
 
@@ -75,7 +77,7 @@ class PersistentManager:
         return ts_val
 
     def _now_unix(self):
-        return int(time.time()) + self.epoch_offset
+        return unix_now()
 
     def _mark_dirty(self):
         self.dirty = True
