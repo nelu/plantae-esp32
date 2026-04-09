@@ -25,7 +25,7 @@ def local_time_tuple():
 
 def local_wday():
     lt = _localtime()
-    return int(lt[6])
+    return (int(lt[6]) - 1) % 7
 
 
 def ts_to_local_day(ts):

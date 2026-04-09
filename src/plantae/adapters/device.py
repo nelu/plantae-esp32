@@ -47,6 +47,7 @@ def sync_rtc_via_ntp(host="pool.ntp.org", retries=3, tz_offset_min=0):
             now_utc = unix_now()
             if now_utc > unix_2020:
                 if set_rtc_local_from_utc(now_utc, tz_offset_min):
+                    LOG.info("NTP sync: OK %s", now_utc)
                     return True
         except Exception as e:
             LOG.error("NTP sync: %s",e)

@@ -1,61 +1,81 @@
-<!doctype html>
-<meta charset="utf-8">
-<meta name="viewport" content="width=device-width,initial-scale=1">
-<title>Plantae Device Configuration</title>
-<style>
-body{font-family:sans-serif;max-width:440px;margin:24px auto;padding:0 12px}
-input,button{width:100%;padding:10px;margin:8px 0;font-size:16px;box-sizing:border-box}
-pre{background:#f6f6f6;padding:12px;white-space:pre-wrap;word-break:break-word;border-radius:8px}
-</style>
-<h2>Configure Wi-Fi connection</h2>
-<form id="f">
-  <input id="s" placeholder="SSID" autocomplete="off" required>
-  <input id="p" placeholder="WIFI Password" type="password" autocomplete="off" minlength="8" required>
-  <button type="submit">Connect</button>
-</form>
-<pre id="o">Idle.</pre>
-<script>
-const $ = i => document.getElementById(i);
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Plantae Device Configuration</title>
+  <style>
+    body { font-family: sans-serif; max-width: 440px; margin: 24px auto; padding: 0 12px; }
+    input, button { width: 100%; padding: 10px; margin: 8px 0; font-size: 16px; box-sizing: border-box; }
+    pre { background: #f6f6f6; padding: 12px; white-space: pre-wrap; word-break: break-word; border-radius: 8px; }
+  </style>
+</head>
+<body>
+  <h2>Configure Wi-Fi connection</h2>
 
-const baseConfig = {
-  wifi: {ssid: "", password: ""},
-  ntp: {host: "pool.ntp.org", sync_every_s: 21600},
-  wamp: {
-    url: "wss://plantae.robits.org/ws",
-    sni_host: "plantae.robits.org",
-    realm: "none",
-    prefix: "",
-    token: "",
-    keepalive: {ping_interval_s: 25, idle_timeout_s: 180}
-  },
-  flow: {type: "YFS401", pin: 34, calibration: 4000, read_interval_ms: 1000, pullup_external: false},
-  inputs: {pwm_test_btn: {pin: 13, active_low: true, test_duty: 0.5}},
-  outputs: {pwm: {pin: 12, freq: 100, active_low: false}},
-  schedule: {pwm: [], dosing: {
-      "days": ["", "", "", "", "", "", ""],
-      "output": "pwm",
-      "duty": 0.5,
-      "quantity": 0.1
-    }}
-};
+  <form id="f">
+    <input id="s" placeholder="SSID" autocomplete="off" required>
+    <input id="p" placeholder="WIFI Password" type="password" autocomplete="off" minlength="8" required>
+    <button type="submit">Connect</button>
+  </form>
 
-$("f").onsubmit = async e => {
-  e.preventDefault();
-  $("o").textContent = "Testing Wi-Fi in progress...";
+  <pre id="o">Idle.</pre>
 
-  const payload = JSON.parse(JSON.stringify(baseConfig));
-  payload.wifi = {ssid: $("s").value, password: $("p").value};
+  <p>
+    After connecting the device to the internet, login to your
+    <strong><a href="https://plantae.robits.org">https://plantae.robits.org</a></strong>
+    account and pair your device.
+  </p>
 
-  try {
-    const r = await fetch("/provisioning", {
-      method: "POST",
-      headers: {"Content-Type": "application/json"},
-      body: JSON.stringify(payload)
-    });
-    const j = await r.json();
-    $("o").textContent = JSON.stringify(j, null, 2) + ("\n\n" + (j && j.ok ? "Rebooting..." : "Wi-Fi test failed; nothing saved."));
-  } catch (err) {
-    $("o").textContent = "Error: " + err;
-  }
-};
-</script>
+  <script>
+    const $ = i => document.getElementById(i);
+
+    const baseConfig = {
+      wifi: { ssid: "", password: "" },
+      ntp: { host: "pool.ntp.org", sync_every_s: 21600 },
+      wamp: {
+        url: "wss://plantae.robits.org/ws",
+        sni_host: "plantae.robits.org",
+        realm: "none",
+        prefix: "",
+        token: "",
+        keepalive: { ping_interval_s: 25, idle_timeout_s: 180 }
+      },
+      flow: { type: "YFS401", pin: 8, calibration: 8000, read_interval_ms: 1000, pullup_external: false },
+      inputs: { pwm_test_btn: { pin: 13, active_low: true, test_duty: 1 } },
+      outputs: { pwm: { pin: 12, freq: 100, active_low: false } },
+      schedule: {
+        pwm: [],
+        dosing: {
+          days: ["", "", "", "", "", "", ""],
+          output: "pwm",
+          duty: 1,
+          quantity: 0.1
+        }
+      }
+    };
+
+    $("f").onsubmit = async e => {
+      e.preventDefault();
+      $("o").textContent = "Testing Wi-Fi in progress...";
+
+      const payload = JSON.parse(JSON.stringify(baseConfig));
+      payload.wifi = { ssid: $("s").value, password: $("p").value };
+
+      try {
+        const r = await fetch("/provisioning", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(payload)
+        });
+        const j = await r.json();
+        $("o").textContent =
+          JSON.stringify(j, null, 2) +
+          ("\n\n" + (j && j.ok ? "Rebooting..." : "Wi-Fi test failed; nothing saved."));
+      } catch (err) {
+        $("o").textContent = "Error: " + err;
+      }
+    };
+  </script>
+</body>
+</html>

@@ -1,6 +1,7 @@
 import time
 import network
 from ..adapters.wifi import Wifi
+from ..adapters.config_manager import CFG
 from logging import LOG
 import uasyncio as asyncio
 import ujson as json
@@ -213,7 +214,7 @@ class ProvisionHttp(HttpApi):
                     patch = data or {}
                     patch["wifi"] = {"ssid": ssid, "password": pwd}
                     self.service.patch_config(patch)
-                    payload = {"ok": True, "saved": True, "rebooting": True}
+                    payload = {"ok": True, "saved": True, "rebooting": True, "device_id": CFG.device_id}
                     payload.update(result)
                     await self._json(writer, payload)
                     await writer.drain()

@@ -160,10 +160,10 @@ class DeviceService:
             except Exception as e:
                 LOG.error("shutdown_outputs: pwm release failed: %s", e)
 
-        try:
-            self.state.pwm_duty = 0.0
-        except Exception:
-            pass
+        # try:
+        self.state.pwm_duty = 0.0
+        # except Exception:
+        #     pass
 
     def set_pwm_manual(self, duty, override=True, source="other"):
         """Set PWM duty manually with override flag. duty=0 releases override if override=False."""

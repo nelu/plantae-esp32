@@ -81,13 +81,13 @@ class Supervisor:
         if self._reboot_at and time.ticks_diff(time.ticks_ms(), self._reboot_at) >= 0:
             try:
                 self.service.shutdown_outputs()
+                self.stats.save()
             except Exception as e:
                 LOG.error("shutdown before reset failed: %s", e)
             from machine import reset
             reset()
 
     async def run(self):
-        import gc
 
         try:
             LOG.info("supervisor: run")
