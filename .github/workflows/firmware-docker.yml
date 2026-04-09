@@ -93,6 +93,11 @@ jobs:
           build-args: |
             BASE_IMAGE=${{ needs.fw_sdk.outputs.image }}
             app_version=${{ env.APP_VERSION }}
+      - name: Free disk space
+        run: |
+          df -h
+          docker system prune -af --volumes
+          df -h
       - name: Extract firmware binaries
         run: |
           docker create --name fw_extract fw_build:${{ github.run_id }}
