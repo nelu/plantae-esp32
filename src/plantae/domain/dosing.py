@@ -165,7 +165,7 @@ class DosingController:
         day_idx = local_wday()
         start_str = days[day_idx]
 
-        LOG.info('today %s dosing schedule %s - cfg %s', day_idx, start_str, str(days))
+        # LOG.info('today %s dosing schedule %s - cfg %s', day_idx, start_str, str(days))
 
         if not start_str:
             return
@@ -175,7 +175,7 @@ class DosingController:
         except Exception:
             LOG.error("Invalid dosing time for day %d: %s", day_idx, start_str)
             return
-        LOG.info('today %s dosing schedule %s - cfg %s ; start_min %s', day_idx, start_str, str(days), start_min)
+        # LOG.info('today %s dosing schedule %s - cfg %s ; start_min %s', day_idx, start_str, str(days), start_min)
 
         if local_minutes >= start_min:
             quantity = float(dosing_cfg.get("quantity", 0) or 0)
