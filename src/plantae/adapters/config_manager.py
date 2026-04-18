@@ -37,6 +37,11 @@ def default_cfg():
                 "test_duty": 0.5
             }
         },
+        "schedule": {
+            "dosing": {
+                "min_progress_ml": 10,
+            }
+        },
     }
 
 

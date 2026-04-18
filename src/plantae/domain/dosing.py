@@ -21,6 +21,8 @@ class DosingController:
         self.target_quantity = 0.0
         self.dose_start_time = 0
         self.timeout_s = 60  # 1 minute timeout for safety
+        self.progress_window_start_ts = 0
+        self.progress_window_start_volume = 0.0
         self.last_auto_dose_day = -1  # Track daily auto-dosing (local day)
         self.activity_update = activity_update
         self.alert_set = alert_set
@@ -56,6 +58,8 @@ class DosingController:
         self.dose_start_volume = self.flow_sensor.volume_l
         self.target_quantity = float(quantity_l)
         self.dose_start_time = unix_now()
+        self.progress_window_start_ts = self.dose_start_time
+        self.progress_window_start_volume = self.dose_start_volume
 
         # Start the output at full duty
         self.output_controller.set(output_duty)
@@ -119,6 +123,16 @@ class DosingController:
         except Exception as e:
             LOG.error("notify_activity failed: %s", e)
 
+    def _min_progress_l(self):
+        dosing_cfg = CFG.data.get("schedule", {}).get("dosing", {})
+        try:
+            min_progress_ml = float(dosing_cfg.get("min_progress_ml", 10) or 10)
+        except Exception:
+            min_progress_ml = 10.0
+        if min_progress_ml < 0:
+            min_progress_ml = 0.0
+        return min_progress_ml / 1000.0
+
     async def update(self, local_minutes, wamp=None):
         """Update dosing state - call this regularly from main loop"""
         # Check for automatic dosing
@@ -126,27 +140,43 @@ class DosingController:
         
         if not self.is_dosing:
             return
-            
-        # Check timeout
-        duration = unix_now() - self.dose_start_time
-        if duration > self.timeout_s:
-            LOG.error("Dosing timeout after %.1f seconds", duration)
-            self.alert_set("dosing", "timeout", ts=self.dose_start_time)
-            self.stop_dose()
-            return
-            
+
+        now = unix_now()
+        current_volume = self.flow_sensor.volume_l
+        dosed_volume = current_volume - self.dose_start_volume
+
         # Check if target reached
-        dosed_volume = self.flow_sensor.volume_l - self.dose_start_volume
         if dosed_volume >= self.target_quantity:
+            duration = now - self.dose_start_time
             LOG.info("Dosing complete: %.3f L in %.1f seconds", 
                      dosed_volume, duration)
 
             if not self._is_manual_dose and self.stats:
-                self.stats.record_dose(unix_now(), persist_immediately=True)
+                self.stats.record_dose(now, persist_immediately=True)
                 self.last_auto_dose_day = current_local_day()
             self.stop_dose()
             return
-            
+
+        min_progress_l = self._min_progress_l()
+        window_progress_l = current_volume - self.progress_window_start_volume
+        if window_progress_l >= min_progress_l:
+            self.progress_window_start_ts = now
+            self.progress_window_start_volume = current_volume
+            return
+
+        stalled_s = now - self.progress_window_start_ts
+        if stalled_s > self.timeout_s:
+            LOG.error(
+                "Dosing stalled after %.1f seconds without %.3f L progress (observed %.3f L)",
+                stalled_s,
+                min_progress_l,
+                max(0.0, window_progress_l),
+            )
+            if self.alert_set:
+                self.alert_set("dosing", "timeout", ts=self.dose_start_time)
+            self.stop_dose()
+            return
+             
     async def _check_auto_dose(self, local_minutes):
         """Check if we should start automatic dosing"""
         if self.is_dosing:  # Don't auto-dose if already dosing
