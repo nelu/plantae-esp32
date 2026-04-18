@@ -7,6 +7,9 @@ import unittest
 import time
 import sys
 import os
+import importlib.util
+import binascii
+import types
 
 # Provide a stub machine.unique_id if the platform lacks it (e.g., unix port).
 try:
@@ -21,6 +24,14 @@ except Exception:
     machine = _MachineStub()
     machine.unique_id = lambda: b"\x00\x01\x02\x03\x04\x05"
     sys.modules["machine"] = machine
+
+if "micropython" not in sys.modules:
+    micropython = types.SimpleNamespace(const=lambda value: value)
+    sys.modules["micropython"] = micropython
+
+if "ubinascii" not in sys.modules:
+    ubinascii = types.SimpleNamespace(hexlify=binascii.hexlify)
+    sys.modules["ubinascii"] = ubinascii
 
 try:
     import asyncio
@@ -75,14 +86,28 @@ for p in (
     ROOT + "/src/lib",
 ):
     if p not in sys.path:
-        sys.path.append(p)
+        sys.path.insert(0, p)
+
+_project_datetime = os.path.join(ROOT, "src", "datetime.py")
+if os.path.exists(_project_datetime):
+    try:
+        _spec = importlib.util.spec_from_file_location("datetime", _project_datetime)
+        _datetime_mod = importlib.util.module_from_spec(_spec)
+        _spec.loader.exec_module(_datetime_mod)
+        sys.modules["datetime"] = _datetime_mod
+    except Exception:
+        pass
 
 # Force use of project logging module so LOG/Logger are available
-try:
-    import lib.logging as _proj_logging
-    sys.modules["logging"] = _proj_logging
-except Exception:
-    pass
+_project_logging = os.path.join(ROOT, "src", "logging.py")
+if os.path.exists(_project_logging):
+    try:
+        _spec = importlib.util.spec_from_file_location("logging", _project_logging)
+        _proj_logging = importlib.util.module_from_spec(_spec)
+        _spec.loader.exec_module(_proj_logging)
+        sys.modules["logging"] = _proj_logging
+    except Exception:
+        pass
 
 # Provide a lightweight umsgpack stub if missing (used only for persistence helpers)
 try:
@@ -119,30 +144,57 @@ class MockPwmOut:
         self.duty = duty
 
 
-class TestDosingController(unittest.TestCase):
+class MockAlerts:
+    def __init__(self):
+        self._alerts = {}
+
+    def get_alert(self, kind):
+        return self._alerts.get(kind)
+
+
+class MockState:
+    def __init__(self):
+        self.alerts = MockAlerts()
+        self.pwm_duty = 0.0
+
+
+class TestDosingController(unittest.IsolatedAsyncioTestCase):
     def setUp(self):
         self.flow_sensor = MockFlowSensor()
         self.pwm_out = MockPwmOut()
+        self.state = MockState()
+        self.alert_calls = []
         self.cfg = {
             "schedule": {
                 "dosing": {
                     "days": ["17:00"] * 7,
                     "output": "pwm",
                     "duty": 0.5,
-                    "quantity": 0.25
+                    "quantity": 0.25,
+                    "min_progress_ml": 10,
                 }
             }
         }
 
         # Import here to avoid MicroPython import issues
         try:
-            from src.domain.dosing import DosingController
-            from src.adapters.config_manager import CFG
+            import src.plantae.domain.dosing as dosing
+            from src.plantae.domain.dosing import DosingController
+            from src.plantae.adapters.config_manager import CFG
             CFG.data = self.cfg
-            self.controller = DosingController(self.flow_sensor, self.pwm_out)
+            self.dosing_module = dosing
+            self.controller = DosingController(
+                self.flow_sensor,
+                self.pwm_out,
+                state=self.state,
+                alert_set=self._alert_set,
+            )
             self.controller.config = self.cfg
         except ImportError:
             self.skipTest("DosingController not available (MicroPython only)")
+
+    def _alert_set(self, kind, message, ts=None):
+        self.alert_calls.append({"kind": kind, "message": message, "ts": ts})
     
     def test_initial_state(self):
         """Test initial controller state"""
@@ -218,28 +270,54 @@ class TestDosingController(unittest.TestCase):
         self.assertAlmostEqual(status["remaining_l"], 0.3)
         self.assertGreaterEqual(status["duration_s"], 0)
 
+    def test_dosing_timeout_reset_threshold_is_twice_min_progress(self):
+        self.cfg["schedule"]["dosing"]["min_progress_ml"] = 12.5
+
+        self.assertAlmostEqual(self.dosing_module.dosing_min_progress_l(), 0.0125)
+
+    def test_current_flow_volume_l_falls_back_to_state(self):
+        self.flow_sensor.volume_l = 0.123
+        self.state.volume_l = 0.456
+
+        self.assertAlmostEqual(
+            self.dosing_module.current_flow_volume_l(flow_sensor=self.flow_sensor, state=self.state),
+            0.123,
+        )
+        self.assertAlmostEqual(
+            self.dosing_module.current_flow_volume_l(flow_sensor=None, state=self.state),
+            0.456,
+        )
+
+    def test_dosing_min_progress_clamps_negative_values(self):
+        self.cfg["schedule"]["dosing"]["min_progress_ml"] = -5
+
+        self.assertEqual(self.dosing_module.dosing_min_progress_l(), 0.0)
+
     def test_local_wday_is_monday_for_epoch_day_4(self):
         """Weekday calculation stays Monday with tz offset applied"""
         monday_ts = 4 * 86400  # 1970-01-05 00:00:00 UTC (Monday)
-        import src.domain.dosing as dosing
+        import datetime as plantae_datetime
 
-        orig_time_mod = dosing.time
+        orig_time = plantae_datetime.time
 
         class _TimeStub:
-            pass
+            @staticmethod
+            def time():
+                return monday_ts
 
-        _stub = _TimeStub()
-        _stub.time = lambda: monday_ts
-        _stub.localtime = lambda t=None: time.gmtime(t)
+            @staticmethod
+            def localtime(t=None):
+                return time.gmtime(monday_ts if t is None else t)
+
         try:
-            dosing.time = _stub
-            self.assertEqual(dosing.local_wday(), 0)
+            plantae_datetime.time = _TimeStub()
+            self.assertEqual(plantae_datetime.local_wday(), 0)
         finally:
-            dosing.time = orig_time_mod
+            plantae_datetime.time = orig_time
 
     async def test_update_triggers_auto_dose_for_today(self):
         """Auto dosing starts when today's slot is set and not yet dosed"""
-        import src.domain.dosing as dosing
+        import src.plantae.domain.dosing as dosing
         orig_wday, orig_day = dosing.local_wday, dosing.current_local_day
         dosing.local_wday = lambda: 0
         dosing.current_local_day = lambda: 123
@@ -252,8 +330,8 @@ class TestDosingController(unittest.TestCase):
             dosing.current_local_day = orig_day
 
     async def test_update_skips_empty_day(self):
-        from src.adapters.config_manager import CFG
-        import src.domain.dosing as dosing
+        from src.plantae.adapters.config_manager import CFG
+        import src.plantae.domain.dosing as dosing
         CFG.data["schedule"]["dosing"]["days"][0] = ""
         orig_wday, orig_day = dosing.local_wday, dosing.current_local_day
         dosing.local_wday = lambda: 0
@@ -266,7 +344,7 @@ class TestDosingController(unittest.TestCase):
             dosing.current_local_day = orig_day
 
     async def test_update_skips_if_already_dosed_today(self):
-        import src.domain.dosing as dosing
+        import src.plantae.domain.dosing as dosing
         orig_wday, orig_day = dosing.local_wday, dosing.current_local_day
         dosing.local_wday = lambda: 0
         dosing.current_local_day = lambda: 300
@@ -277,6 +355,71 @@ class TestDosingController(unittest.TestCase):
         finally:
             dosing.local_wday = orig_wday
             dosing.current_local_day = orig_day
+
+    async def test_update_times_out_when_progress_below_threshold(self):
+        import src.plantae.domain.dosing as dosing
+
+        original_unix_now = dosing.unix_now
+        now = 100
+        dosing.unix_now = lambda: now
+        try:
+            await self.controller.start_dose(3.0)
+            self.flow_sensor.volume_l = 0.009
+            now = 161
+
+            await self.controller.update(0)
+
+            self.assertFalse(self.controller.is_dosing)
+            self.assertEqual(self.pwm_out.duty, 0.0)
+            self.assertEqual(len(self.alert_calls), 1)
+            self.assertEqual(self.alert_calls[0]["kind"], "dosing")
+            self.assertEqual(self.alert_calls[0]["message"], "timeout")
+        finally:
+            dosing.unix_now = original_unix_now
+
+    async def test_update_keeps_running_with_sufficient_progress(self):
+        import src.plantae.domain.dosing as dosing
+
+        original_unix_now = dosing.unix_now
+        now = 100
+        dosing.unix_now = lambda: now
+        try:
+            await self.controller.start_dose(3.0)
+
+            self.flow_sensor.volume_l = 0.011
+            now = 130
+            await self.controller.update(0)
+
+            self.flow_sensor.volume_l = 0.022
+            now = 191
+            await self.controller.update(0)
+
+            self.assertTrue(self.controller.is_dosing)
+            self.assertEqual(self.pwm_out.duty, 0.5)
+            self.assertEqual(self.alert_calls, [])
+        finally:
+            dosing.unix_now = original_unix_now
+
+    async def test_update_small_progress_does_not_reset_timeout(self):
+        import src.plantae.domain.dosing as dosing
+
+        original_unix_now = dosing.unix_now
+        now = 100
+        dosing.unix_now = lambda: now
+        try:
+            await self.controller.start_dose(3.0)
+
+            self.flow_sensor.volume_l = 0.001
+            now = 130
+            await self.controller.update(0)
+
+            now = 161
+            await self.controller.update(0)
+
+            self.assertFalse(self.controller.is_dosing)
+            self.assertEqual(len(self.alert_calls), 1)
+        finally:
+            dosing.unix_now = original_unix_now
 
 
 def run_async_test(coro):
@@ -290,24 +433,7 @@ def run_async_test(coro):
 
 
 if __name__ == '__main__':
-    # Convert async test methods to sync for unittest
-    test_case = TestDosingController()
-    
     try:
-        test_case.setUp()
-        
-        async_tests = [
-            'test_start_dose_valid',
-            'test_start_dose_already_dosing',
-            'test_update_triggers_auto_dose_for_today',
-            'test_update_skips_empty_day',
-            'test_update_skips_if_already_dosed_today'
-        ]
-        
-        for test_name in async_tests:
-            test_method = getattr(test_case, test_name)
-            setattr(test_case, test_name, lambda self, tm=test_method: run_async_test(tm()))
-        
         unittest.main()
     except Exception as e:
         print(f"Skipping tests: {e}")
