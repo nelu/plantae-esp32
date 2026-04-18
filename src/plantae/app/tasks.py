@@ -144,20 +144,72 @@ async def task_pwm_test_btn(sup):
 
     active_low = btn_cfg.get("active_low", True)
     test_duty = btn_cfg.get("test_duty", 1.0)
+    long_press_ms = 10000
 
     btn = Pin(pin_num, Pin.IN)
     button_override_active = False
+    press_started_ms = None
+    long_press_fired = False
+    cancelled_active_dose_this_press = False
+    was_pressed = False
 
     while True:
         state = btn.value()
         pressed = (state == 0) if active_low else (state == 1)
 
-        if pressed and not button_override_active:
-            button_override_active = True
-            sup.service.set_pwm_manual(test_duty, True, source="button")
-        elif not pressed and button_override_active:
-            button_override_active = False
-            sup.service.set_pwm_manual(0, False, source="button")
+        if pressed:
+            if not was_pressed:
+                press_started_ms = time.ticks_ms()
+                long_press_fired = False
+                cancelled_active_dose_this_press = False
+
+                dosing = getattr(sup.service, "dosing", None)
+                if dosing and getattr(dosing, "is_dosing", False):
+                    cancelled_active_dose_this_press = True
+                    try:
+                        dosing.stop_dose()
+                    except Exception as e:
+                        LOG.error("task_pwm_test_btn: stop_dose failed: %s", e)
+                else:
+                    button_override_active = True
+                    sup.service.set_pwm_manual(test_duty, True, source="button")
+            elif (
+                not cancelled_active_dose_this_press
+                and not long_press_fired
+                and press_started_ms is not None
+                and time.ticks_diff(time.ticks_ms(), press_started_ms) >= long_press_ms
+            ):
+                long_press_fired = True
+
+                if button_override_active:
+                    button_override_active = False
+                    sup.service.set_pwm_manual(0, False, source="button")
+
+                dosing = getattr(sup.service, "dosing", None)
+                if not dosing:
+                    LOG.error("task_pwm_test_btn: dosing controller not initialized")
+                else:
+                    quantity = CFG.data.get("schedule", {}).get("dosing", {}).get("quantity", 0)
+                    try:
+                        quantity = float(quantity or 0)
+                    except Exception:
+                        quantity = 0
+
+                    if quantity <= 0:
+                        LOG.error("task_pwm_test_btn: invalid dosing quantity for long press")
+                    else:
+                        # A press that cancelled an active dose must be released before starting again.
+                        await dosing.start_dose(quantity, is_manual=True)
+        elif was_pressed:
+            if button_override_active:
+                button_override_active = False
+                sup.service.set_pwm_manual(0, False, source="button")
+
+            press_started_ms = None
+            long_press_fired = False
+            cancelled_active_dose_this_press = False
+
+        was_pressed = pressed
 
         await asyncio.sleep_ms(50)
 
