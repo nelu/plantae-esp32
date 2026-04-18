@@ -5,6 +5,7 @@ import uasyncio as asyncio
 from logging import LOG
 
 from ..adapters.config_manager import CFG
+from ..domain.dosing import current_flow_volume_l, dosing_min_progress_l
 from datetime import local_minutes, local_time_tuple
 
 
@@ -136,6 +137,14 @@ async def task_stats(sup):
 async def task_pwm_test_btn(sup):
     from machine import Pin
 
+    service = sup.service
+    state = getattr(sup, "state", None)
+    alerts = getattr(state, "alerts", None)
+    reset_threshold_l = dosing_min_progress_l() * 2.0
+
+    def flow_volume_l():
+        return current_flow_volume_l(flow_sensor=getattr(service, "flow", None), state=state)
+
     btn_cfg = CFG.data.get("inputs", {}).get("pwm_test_btn", {})
     pin_num = btn_cfg.get("pin")
     if not pin_num:
@@ -151,6 +160,8 @@ async def task_pwm_test_btn(sup):
     press_started_ms = None
     long_press_fired = False
     cancelled_active_dose_this_press = False
+    recovery_start_volume = None
+    recovery_alert_cleared_this_press = False
     was_pressed = False
 
     while True:
@@ -162,8 +173,10 @@ async def task_pwm_test_btn(sup):
                 press_started_ms = time.ticks_ms()
                 long_press_fired = False
                 cancelled_active_dose_this_press = False
+                recovery_start_volume = None
+                recovery_alert_cleared_this_press = False
 
-                dosing = getattr(sup.service, "dosing", None)
+                dosing = getattr(service, "dosing", None)
                 if dosing and getattr(dosing, "is_dosing", False):
                     cancelled_active_dose_this_press = True
                     try:
@@ -171,8 +184,10 @@ async def task_pwm_test_btn(sup):
                     except Exception as e:
                         LOG.error("task_pwm_test_btn: stop_dose failed: %s", e)
                 else:
+                    if alerts and alerts.get_alert("dosing"):
+                        recovery_start_volume = flow_volume_l()
                     button_override_active = True
-                    sup.service.set_pwm_manual(test_duty, True, source="button")
+                    service.set_pwm_manual(test_duty, True, source="button")
             elif (
                 not cancelled_active_dose_this_press
                 and not long_press_fired
@@ -183,9 +198,9 @@ async def task_pwm_test_btn(sup):
 
                 if button_override_active:
                     button_override_active = False
-                    sup.service.set_pwm_manual(0, False, source="button")
+                    service.set_pwm_manual(0, False, source="button")
 
-                dosing = getattr(sup.service, "dosing", None)
+                dosing = getattr(service, "dosing", None)
                 if not dosing:
                     LOG.error("task_pwm_test_btn: dosing controller not initialized")
                 else:
@@ -200,14 +215,34 @@ async def task_pwm_test_btn(sup):
                     else:
                         # A press that cancelled an active dose must be released before starting again.
                         await dosing.start_dose(quantity, is_manual=True)
+
+            if (
+                not cancelled_active_dose_this_press
+                and not recovery_alert_cleared_this_press
+                and recovery_start_volume is not None
+            ):
+                recovered_volume = flow_volume_l() - recovery_start_volume
+                if recovered_volume >= reset_threshold_l:
+                    try:
+                        service.clear_alert("dosing")
+                    except Exception as e:
+                        LOG.error("task_pwm_test_btn: clear_alert failed: %s", e)
+                    else:
+                        LOG.info(
+                            "task_pwm_test_btn: cleared dosing timeout after %.3f L recovered flow",
+                            recovered_volume,
+                        )
+                    recovery_alert_cleared_this_press = True
         elif was_pressed:
             if button_override_active:
                 button_override_active = False
-                sup.service.set_pwm_manual(0, False, source="button")
+                service.set_pwm_manual(0, False, source="button")
 
             press_started_ms = None
             long_press_fired = False
             cancelled_active_dose_this_press = False
+            recovery_start_volume = None
+            recovery_alert_cleared_this_press = False
 
         was_pressed = pressed
 
@@ -313,4 +348,4 @@ async def task_dosing(sup):
             await sup.service.dosing.update(mins)
             sup.state.dosing_status = sup.service.dosing.get_dose_status()
 
-        await asyncio.sleep(2)
+        await asyncio.sleep(1)

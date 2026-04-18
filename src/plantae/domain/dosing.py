@@ -10,6 +10,29 @@ from logging import LOG
 
 from ..adapters.config_manager import CFG
 
+
+def dosing_min_progress_l():
+    dosing_cfg = CFG.data.get("schedule", {}).get("dosing", {})
+    try:
+        min_progress_ml = float(dosing_cfg.get("min_progress_ml", 10) or 10)
+    except Exception:
+        min_progress_ml = 10.0
+    if min_progress_ml < 0:
+        min_progress_ml = 0.0
+    return min_progress_ml / 1000.0
+
+
+def current_flow_volume_l(flow_sensor=None, state=None):
+    if flow_sensor is not None:
+        try:
+            return float(getattr(flow_sensor, "volume_l", 0.0) or 0.0)
+        except Exception:
+            pass
+    try:
+        return float(getattr(state, "volume_l", 0.0) or 0.0)
+    except Exception:
+        return 0.0
+
 class DosingController:
     def __init__(self, flow_sensor, output_controller, state=None, stats=None, alert_set=None, activity_update=None):
         self.flow_sensor = flow_sensor
@@ -123,16 +146,6 @@ class DosingController:
         except Exception as e:
             LOG.error("notify_activity failed: %s", e)
 
-    def _min_progress_l(self):
-        dosing_cfg = CFG.data.get("schedule", {}).get("dosing", {})
-        try:
-            min_progress_ml = float(dosing_cfg.get("min_progress_ml", 10) or 10)
-        except Exception:
-            min_progress_ml = 10.0
-        if min_progress_ml < 0:
-            min_progress_ml = 0.0
-        return min_progress_ml / 1000.0
-
     async def update(self, local_minutes, wamp=None):
         """Update dosing state - call this regularly from main loop"""
         # Check for automatic dosing
@@ -157,7 +170,7 @@ class DosingController:
             self.stop_dose()
             return
 
-        min_progress_l = self._min_progress_l()
+        min_progress_l = dosing_min_progress_l()
         window_progress_l = current_volume - self.progress_window_start_volume
         if window_progress_l >= min_progress_l:
             self.progress_window_start_ts = now

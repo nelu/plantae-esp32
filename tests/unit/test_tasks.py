@@ -126,15 +126,34 @@ class _DummyPwm:
         self.last_duty = duty
 
 
+class _DummyFlow:
+    def __init__(self):
+        self.volume_l = 0.0
+
+
+class _DummyAlerts:
+    def __init__(self):
+        self._alerts = {}
+
+    def get_alert(self, kind):
+        return self._alerts.get(kind)
+
+
 class _DummyService:
     def __init__(self):
         self.pwm_override = False
         self.dosing = None
         self.pwm = _DummyPwm()
+        self.flow = _DummyFlow()
         self.manual = []
+        self.cleared_alerts = []
 
     def set_pwm_manual(self, duty, override, source=None):
         self.manual.append((duty, override, source))
+
+    def clear_alert(self, kind):
+        self.cleared_alerts.append(kind)
+        return True
 
 
 class _DummyDosing:
@@ -159,6 +178,8 @@ class _DummyState:
         self.ip = "0.0.0.0"
         self.signal = None
         self.pwm_duty = 0
+        self.volume_l = 0.0
+        self.alerts = _DummyAlerts()
 
 
 class _DummySup:
@@ -188,7 +209,7 @@ class _FakePin:
         return self.sequence[idx]
 
 
-def _run_button_task(states, sup, step_ms=50):
+def _run_button_task(states, sup, step_ms=50, volumes=None):
     fake_machine = sys.modules["machine"]
     old_pin = getattr(fake_machine, "Pin", None)
     old_ticks_ms = getattr(tasks.time, "ticks_ms", None)
@@ -199,9 +220,16 @@ def _run_button_task(states, sup, step_ms=50):
     _FakePin.index = 0
     now = {"value": 0}
 
+    if volumes:
+        sup.service.flow.volume_l = volumes[0]
+        sup.state.volume_l = volumes[0]
+
     async def step_sleep_ms(*args, **kwargs):
         now["value"] += step_ms
         _FakePin.index += 1
+        if volumes and _FakePin.index < len(volumes):
+            sup.service.flow.volume_l = volumes[_FakePin.index]
+            sup.state.volume_l = volumes[_FakePin.index]
         if _FakePin.index >= len(_FakePin.sequence):
             raise StopAsyncIteration
 
@@ -318,7 +346,7 @@ class TasksTests(unittest.TestCase):
         sup = _DummySup()
         sup.service.dosing = _DummyDosing(active=False)
 
-        _run_button_task(([0] * 61) + [1], sup)
+        _run_button_task(([0] * 51) + [1], sup, step_ms=200)
 
         self.assertEqual(
             sup.service.manual,
@@ -331,8 +359,35 @@ class TasksTests(unittest.TestCase):
         sup = _DummySup()
         sup.service.dosing = _DummyDosing(active=False)
 
-        _run_button_task(([0] * 80) + [1], sup)
+        _run_button_task(([0] * 80) + [1], sup, step_ms=200)
 
+        self.assertEqual(sup.service.dosing.start_calls, [(0.25, True)])
+
+    def test_task_pwm_test_btn_short_press_clears_timeout_after_recovery(self):
+        sup = _DummySup()
+        sup.state.alerts._alerts["dosing"] = {"message": "timeout", "ts": 123}
+
+        _run_button_task([0, 0, 1], sup, volumes=[0.0, 0.02, 0.02])
+
+        self.assertEqual(sup.service.cleared_alerts, ["dosing"])
+
+    def test_task_pwm_test_btn_short_press_keeps_timeout_when_recovery_too_small(self):
+        sup = _DummySup()
+        sup.state.alerts._alerts["dosing"] = {"message": "timeout", "ts": 123}
+
+        _run_button_task([0, 0, 1], sup, volumes=[0.0, 0.019, 0.019])
+
+        self.assertEqual(sup.service.cleared_alerts, [])
+
+    def test_task_pwm_test_btn_long_press_can_clear_timeout_and_start_dose(self):
+        sup = _DummySup()
+        sup.service.dosing = _DummyDosing(active=False)
+        sup.state.alerts._alerts["dosing"] = {"message": "timeout", "ts": 123}
+
+        volumes = [0.0] + ([0.02] * 51)
+        _run_button_task(([0] * 51) + [1], sup, step_ms=200, volumes=volumes)
+
+        self.assertEqual(sup.service.cleared_alerts, ["dosing"])
         self.assertEqual(sup.service.dosing.start_calls, [(0.25, True)])
 
 

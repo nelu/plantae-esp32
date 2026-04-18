@@ -178,9 +178,11 @@ class TestDosingController(unittest.IsolatedAsyncioTestCase):
 
         # Import here to avoid MicroPython import issues
         try:
+            import src.plantae.domain.dosing as dosing
             from src.plantae.domain.dosing import DosingController
             from src.plantae.adapters.config_manager import CFG
             CFG.data = self.cfg
+            self.dosing_module = dosing
             self.controller = DosingController(
                 self.flow_sensor,
                 self.pwm_out,
@@ -267,6 +269,29 @@ class TestDosingController(unittest.IsolatedAsyncioTestCase):
         self.assertAlmostEqual(status["dosed_l"], 0.2)
         self.assertAlmostEqual(status["remaining_l"], 0.3)
         self.assertGreaterEqual(status["duration_s"], 0)
+
+    def test_dosing_timeout_reset_threshold_is_twice_min_progress(self):
+        self.cfg["schedule"]["dosing"]["min_progress_ml"] = 12.5
+
+        self.assertAlmostEqual(self.dosing_module.dosing_min_progress_l(), 0.0125)
+
+    def test_current_flow_volume_l_falls_back_to_state(self):
+        self.flow_sensor.volume_l = 0.123
+        self.state.volume_l = 0.456
+
+        self.assertAlmostEqual(
+            self.dosing_module.current_flow_volume_l(flow_sensor=self.flow_sensor, state=self.state),
+            0.123,
+        )
+        self.assertAlmostEqual(
+            self.dosing_module.current_flow_volume_l(flow_sensor=None, state=self.state),
+            0.456,
+        )
+
+    def test_dosing_min_progress_clamps_negative_values(self):
+        self.cfg["schedule"]["dosing"]["min_progress_ml"] = -5
+
+        self.assertEqual(self.dosing_module.dosing_min_progress_l(), 0.0)
 
     def test_local_wday_is_monday_for_epoch_day_4(self):
         """Weekday calculation stays Monday with tz offset applied"""
